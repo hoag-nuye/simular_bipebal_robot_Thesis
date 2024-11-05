@@ -1,0 +1,13 @@
+<mujoco model="bipedal_environment">
+    <!-- Các tùy chọn môi trường -->
+    <option timestep="0.005" gravity="0 0 -9.81"/>
+
+    <!-- Mặt đất và các đối tượng môi trường khác -->
+    <worldbody>
+        <!-- Mặt đất -->
+        <geom name="ground" type="plane" size="10 10 0.1" rgba="0.2 0.3 0.2 1"/>
+
+        <!-- Định nghĩa ánh sáng -->
+        <light name="main_light" pos="0 0 5" dir="0 0 -1"/>
+    </worldbody>
+</mujoco>
