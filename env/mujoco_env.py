@@ -12,6 +12,7 @@ from env.mujoco_agt import Agent
 class Environment:
     # --------------Initial environment--------------------
     def __init__(self, env_xml, show_left_ui=True, show_right_ui=True):
+
         self.env_xml = env_xml
         self.env_model = mujoco.MjModel.from_xml_path(env_xml)  # Provides the static structure of the model and is instantiated once from an XML file.
         self.env_data = mujoco.MjData(self.env_model) # stores state and is updated throughout the simulation
@@ -31,11 +32,14 @@ class Environment:
         # Create agent list
         self.agents = {}
 
+
+
     # --------------Show simulation--------------------
     def render(self):
         start_tm = time.time()
         # Open view during 30s
-        while self.viewer.is_running() and time.time() - start_tm < 30:
+        # while self.viewer.is_running() and time.time() - start_tm < 30:
+        while self.viewer.is_running():
             step_start_tm = time.time() # create point which is the first running time
 
             if not self.paused:
@@ -65,7 +69,7 @@ class Environment:
     # --------------------Add a new agent----------------------
     def add_agent(self, agent, agent_name):
         # check the agent type
-        if isinstance(agent, Agent):
+        if not isinstance(agent, Agent):
             raise TypeError(f'Warning: the "agent" parameter must be an Agent object!')
 
         # check the agent exists or not
@@ -73,7 +77,7 @@ class Environment:
             raise ValueError(f'Warning: The agent named "{agent_name}" existed!')
 
         # check the XML path of agent
-        if os.path.exists(agent.agent_xml):
+        if not os.path.exists(agent.agent_xml):
             raise FileNotFoundError(f"Warning: Having not found the XML file for the agent with the path is '{agent.agent_xml}!'.")
 
         # Thêm thông tin include vào file XML của môi trường
@@ -88,26 +92,37 @@ class Environment:
 
     # include an agent in XML file
     def __include_agent_in_xml(self, agent_xml, agent_name):
-        # Phân tích env xml
+        # Phân tích file XML
         tree = ET.parse(self.env_xml)
-        # tìm root của agent
-        root = tree.getroot(self.env_xml)
-        # create element
-        include_element = ET.Element("include", file=agent_xml)
-        include_element.attrib['name'] = agent_name # tạo tên cho agent
-        # find 'worldbody' element to add agent
-        worldbody = root.find("worldbody")
-        if worldbody is None:
-            raise ValueError("Không tìm thấy worldbody trong XML của môi trường.")
-        worldbody.append(include_element)
-        # write again xml file of env
-        tree.write(self.env_xml)
+        root = tree.getroot()
+
+        # Tìm phần tử <include> có thuộc tính 'name' là agent_name
+        existing_include = None
+        for elem in root.findall("include"):
+            if elem.get("name") == agent_name:
+                existing_include = elem
+                break
+
+        # Nếu phần tử <include> với agent_name đã tồn tại, xóa nó
+        if existing_include is not None:
+            root.remove(existing_include)
+
+        # Tạo phần tử <include> mới với thuộc tính 'file' và 'name'
+        include_element = ET.Element("include", file=agent_xml.split("/")[-1])
+        include_element.attrib['name'] = agent_name  # Thiết lập tên cho agent
+        include_element.tail = "\n"  # Thêm dấu xuống dòng
+
+        # Thêm phần tử include_element vào vị trí đầu của root
+        root.insert(0, include_element)
+
+        # Ghi lại file XML
+        tree.write(self.env_xml, encoding="utf-8", xml_declaration=True)
 
     def __reload_model(self):
-        # Cập nhật lại model và data của môi trường sau khi thêm agent
-        self.env_model = mujoco.MjModel.from_xml_path(self.env_xml)
-        self.env_data = mujoco.MjData(self.env_model)
-        self.viewer = mujoco.viewer.MjViewer(self.env_model, self.env_data)
+        # Đồng bộ lại dữ liệu môi trường với viewer hiện tại thay vì mở cửa sổ mới
+        self.viewer.sync()  # Đồng bộ trạng thái viewer với dữ liệu môi trường mới
+
+
 
 
 
