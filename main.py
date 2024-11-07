@@ -1,19 +1,39 @@
+import mujoco
+
 from env.mujoco_env import Environment
 from env.mujoco_agt import Agent
 
-
 def main():
     # -------------- initial environment --------------------
-    env_xml_path = 'structures/agility_cassie/environment.xml'
-    env = Environment(env_xml_path)
+    agt_xml_path = 'structures/agility_cassie/cassie.xml'
+    agt = Agent(agt_xml_path)
 
     # -------------- Add a new agent ---------------------
-    agility_cassie_agent = Agent('structures/agility_cassie/cassie.xml', env.env_data)
-    env.add_agent(agility_cassie_agent, 'cassie')
+    env = Environment('structures/agility_cassie/environment.xml', agt.agt_data)
+    agt.add_env(env, 'cassie_env')
 
     # starting simulation
-    with env.viewer:
-        env.render()
+    # Create viewer with UI options
+    with mujoco.viewer.launch_passive(agt.agt_model,
+                                      agt.agt_data,
+                                      # key_callback=self.key_callback,
+                                      show_left_ui=True,
+                                      show_right_ui=True) as viewer:
+
+        print("ACTUATORs:", agt.get_actuators_map())
+        print("SENSORs:", agt.get_sensors_map())
+
+        # ------------ CONSOLE STATE ------------------
+        print("STATE:")
+        for key, value in agt.get_state().items():
+            print(key, ': ', value)
+
+        # ------------ RUNNING ------------------
+        while viewer.is_running():
+            agt.render(viewer)
+
+# ================== RUN MAIN =======================
+
 
 if __name__ == "__main__":
     main()

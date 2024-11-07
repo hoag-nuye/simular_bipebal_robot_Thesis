@@ -1,7 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <mujoco model="cassie scene">
 
-<include file="cassie.xml" name="cassie" />
 <statistic center="0 0 0.55" extent="1.1" />
 
   <visual>
