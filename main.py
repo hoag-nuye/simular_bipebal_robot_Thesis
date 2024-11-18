@@ -1,7 +1,8 @@
 import mujoco
+import time
 
 from env.mujoco_env import Environment
-from env.mujoco_agt import Agent
+from env.agent.mujoco_agt import Agent
 
 def main():
     # -------------- initial environment --------------------
@@ -25,12 +26,18 @@ def main():
 
         # ------------ CONSOLE STATE ------------------
         print("STATE:")
-        for key, value in agt.get_state().items():
+        for key, value in agt.get_sensors_info().items():
             print(key, ': ', value)
 
         # ------------ RUNNING ------------------
         while viewer.is_running():
             agt.render(viewer)
+
+            # chờ 2 giây
+            # time.sleep(2)
+            print("STATE:")
+            status_line = " | ".join([f"{key}: {value:.2f}" for key, value in agt.get_sensors_info().items()])
+            print(f"\rSTATE: {status_line}", end="")
 
 # ================== RUN MAIN =======================
 

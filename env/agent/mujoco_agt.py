@@ -2,11 +2,12 @@ import time
 
 import mujoco
 import mujoco.viewer
-
 import os
 
 from xml.etree import ElementTree as ET
 from env.mujoco_env import Environment
+
+from env.agent.dataclass_agt import SensorFields
 
 
 class Agent:
@@ -68,7 +69,7 @@ class Agent:
         # check the XML path of env
         if not os.path.exists(env.env_xml):
             raise FileNotFoundError(
-                f"Warning: Having not found the XML file for the agent with the path is '{agent.agent_xml}!'.")
+                f"Warning: Having not found the XML file for the agent with the path is '{env.env_xml}!'.")
 
         # Thêm thông tin include vào file XML của môi trường
         self.__include_env_in_xml(env.env_xml, env_name)
@@ -105,7 +106,7 @@ class Agent:
         # Ghi lại file XML
         tree.write(self.agt_xml, encoding="utf-8", xml_declaration=True)
 
-# ========================= OPERATION INFORMATION ======================
+    # ========================= OPERATION INFORMATION ======================
     # trả về tên và index của actuator của agent
     def get_actuators_map(self):
         actuator_map = {}
@@ -126,7 +127,7 @@ class Agent:
 
         return sensor_map
 
-# ---------------------------- STATE --------------------------
+    # ---------------------------- STATE --------------------------
     # trả về index của actuator của agent theo tên
     def __get_actuator_name2id(self, name):
         return mujoco.mj_name2id(self.agt_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
@@ -134,36 +135,57 @@ class Agent:
     # trả về index của sensor của agent theo tên
     def __get_sensor_name2id(self, name):
         return mujoco.mj_name2id(self.agt_model, mujoco.mjtObj.mjOBJ_SENSOR, name)
-    def get_state(self):
+
+    def get_sensors_info(self):
         """
         Lấy thông tin trạng thái của agent từ các cảm biến của MuJoCo.
         Trả về một dictionary chứa 20 thông số trạng thái của agent.
         """
         # Tạo dictionary để lưu trữ các thông số trạng thái
-        state_dict = {
-            "left-hip-roll-input": self.agt_data.sensordata[self.__get_sensor_name2id("left-hip-roll-input")],
-            "left-hip-yaw-input": self.agt_data.sensordata[self.__get_sensor_name2id('left-hip-yaw-input')],
-            "left-hip-pitch-input": self.agt_data.sensordata[self.__get_sensor_name2id("left-hip-pitch-input")],
-            "left-knee-input": self.agt_data.sensordata[self.__get_sensor_name2id("left-knee-input")],
-            "left-foot-input": self.agt_data.sensordata[self.__get_sensor_name2id("left-foot-input")],
-            "right-hip-roll-input": self.agt_data.sensordata[self.__get_sensor_name2id("right-hip-roll-input")],
-            "right-hip-yaw-input": self.agt_data.sensordata[self.__get_sensor_name2id('right-hip-yaw-input')],
-            "right-hip-pitch-input": self.agt_data.sensordata[self.__get_sensor_name2id("right-hip-pitch-input")],
-            "right-knee-input": self.agt_data.sensordata[self.__get_sensor_name2id("right-knee-input")],
-            "right-foot-input": self.agt_data.sensordata[self.__get_sensor_name2id("right-foot-input")],
-            "left-shin-output": self.agt_data.sensordata[self.__get_sensor_name2id("left-shin-output")],
-            "left-tarsus-output": self.agt_data.sensordata[self.__get_sensor_name2id("left-tarsus-output")],
-            "left-foot-output": self.agt_data.sensordata[self.__get_sensor_name2id("left-foot-output")],
-            "right-shin-output": self.agt_data.sensordata[self.__get_sensor_name2id("right-shin-output")],
-            "right-tarsus-output": self.agt_data.sensordata[self.__get_sensor_name2id("right-tarsus-output")],
-            "right-foot-output": self.agt_data.sensordata[self.__get_sensor_name2id("right-foot-output")],
-            "pelvis-orientation": self.agt_data.sensordata[self.__get_sensor_name2id("pelvis-orientation")],
-            "pelvis-angular-velocity": self.agt_data.sensordata[self.__get_sensor_name2id("pelvis-angular-velocity")],
-            "pelvis-linear-acceleration": self.agt_data.sensordata[self.__get_sensor_name2id("pelvis-linear-acceleration")],
-            "pelvis-magnetometer": self.agt_data.sensordata[self.__get_sensor_name2id("pelvis-magnetometer")]
+        sensors_dict = {
+            SensorFields.LEFT_HIP_ROLL_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_HIP_ROLL_INPUT.value)],
+            SensorFields.LEFT_HIP_YAW_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_HIP_YAW_INPUT.value)],
+            SensorFields.LEFT_HIP_PITCH_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_HIP_PITCH_INPUT.value)],
+            SensorFields.LEFT_KNEE_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_KNEE_INPUT.value)],
+            SensorFields.LEFT_FOOT_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_FOOT_INPUT.value)],
+            SensorFields.RIGHT_HIP_ROLL_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_ROLL_INPUT.value)],
+            SensorFields.RIGHT_HIP_YAW_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_YAW_INPUT.value)],
+            SensorFields.RIGHT_HIP_PITCH_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_PITCH_INPUT.value)],
+            SensorFields.RIGHT_KNEE_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_KNEE_INPUT.value)],
+            SensorFields.RIGHT_FOOT_INPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_FOOT_INPUT.value)],
+            SensorFields.LEFT_SHIN_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_SHIN_OUTPUT.value)],
+            SensorFields.LEFT_TARSUS_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_TARSUS_OUTPUT.value)],
+            SensorFields.LEFT_FOOT_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.LEFT_FOOT_OUTPUT.value)],
+            SensorFields.RIGHT_SHIN_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_SHIN_OUTPUT.value)],
+            SensorFields.RIGHT_TARSUS_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_TARSUS_OUTPUT.value)],
+            SensorFields.RIGHT_FOOT_OUTPUT.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.RIGHT_FOOT_OUTPUT.value)],
+            SensorFields.PELVIS_ORIENTATION.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.PELVIS_ORIENTATION.value)],
+            SensorFields.PELVIS_ANGULAR_VELOCITY.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.PELVIS_ANGULAR_VELOCITY.value)],
+            SensorFields.PELVIS_LINEAR_ACCELERATION.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.PELVIS_LINEAR_ACCELERATION.value)],
+            SensorFields.PELVIS_MAGNETOMETER.value: self.agt_data.sensordata[
+                self.__get_sensor_name2id(SensorFields.PELVIS_MAGNETOMETER.value)]
         }
 
-        return state_dict
+        return sensors_dict
 
 # ---------------------------- ACTION(CONTROL) ----------------------
 # def control(self, action):
@@ -183,4 +205,3 @@ class Agent:
 #     self.env_data.ctrl[self.actuator_name_to_index("right-hip-pitch")] = action["right-hip-pitch"]
 #     self.env_data.ctrl[self.actuator_name_to_index("right-knee")] = action["right-knee"]
 #     self.env_data.ctrl[self.actuator_name_to_index("right-foot")] = action["right-foot"]
-
