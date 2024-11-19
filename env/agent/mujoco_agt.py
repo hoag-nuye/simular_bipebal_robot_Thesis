@@ -25,6 +25,24 @@ class Agent:
         # Create agent list
         self.envs = {}
 
+        # Create map of variable of MjData
+        self.qpos_map = self.agt_data.qpos
+        self.qvel_map = self.agt_data.qvel
+        self.sensors_map = {}
+        self.atr_map = {}
+        self.sensors_data = []
+
+        # Setup for agent
+        self.__setup()
+
+    # Save important info of MjData
+    def __setup(self):
+        self.sensors_map = self.get_sensors_map()
+        self.atr_map = self.get_actuators_map()
+        self.sensors_data = self.agt_data.sensordata
+        print('Setup is done !')
+
+
     # --------------Show simulation--------------------
     def render(self, viewer):
 
@@ -127,6 +145,7 @@ class Agent:
 
         return sensor_map
 
+
     # ---------------------------- STATE --------------------------
     # trả về index của actuator của agent theo tên
     def __get_actuator_name2id(self, name):
@@ -139,51 +158,24 @@ class Agent:
     def get_sensors_info(self):
         """
         Lấy thông tin trạng thái của agent từ các cảm biến của MuJoCo.
-        Trả về một dictionary chứa 20 thông số trạng thái của agent.
+        Trả về một dictionary chứa thông số trạng thái của agent.
         """
-        # Tạo dictionary để lưu trữ các thông số trạng thái
-        sensors_dict = {
-            SensorFields.LEFT_HIP_ROLL_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_HIP_ROLL_INPUT.value)],
-            SensorFields.LEFT_HIP_YAW_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_HIP_YAW_INPUT.value)],
-            SensorFields.LEFT_HIP_PITCH_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_HIP_PITCH_INPUT.value)],
-            SensorFields.LEFT_KNEE_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_KNEE_INPUT.value)],
-            SensorFields.LEFT_FOOT_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_FOOT_INPUT.value)],
-            SensorFields.RIGHT_HIP_ROLL_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_ROLL_INPUT.value)],
-            SensorFields.RIGHT_HIP_YAW_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_YAW_INPUT.value)],
-            SensorFields.RIGHT_HIP_PITCH_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_HIP_PITCH_INPUT.value)],
-            SensorFields.RIGHT_KNEE_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_KNEE_INPUT.value)],
-            SensorFields.RIGHT_FOOT_INPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_FOOT_INPUT.value)],
-            SensorFields.LEFT_SHIN_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_SHIN_OUTPUT.value)],
-            SensorFields.LEFT_TARSUS_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_TARSUS_OUTPUT.value)],
-            SensorFields.LEFT_FOOT_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.LEFT_FOOT_OUTPUT.value)],
-            SensorFields.RIGHT_SHIN_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_SHIN_OUTPUT.value)],
-            SensorFields.RIGHT_TARSUS_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_TARSUS_OUTPUT.value)],
-            SensorFields.RIGHT_FOOT_OUTPUT.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.RIGHT_FOOT_OUTPUT.value)],
-            SensorFields.PELVIS_ORIENTATION.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.PELVIS_ORIENTATION.value)],
-            SensorFields.PELVIS_ANGULAR_VELOCITY.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.PELVIS_ANGULAR_VELOCITY.value)],
-            SensorFields.PELVIS_LINEAR_ACCELERATION.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.PELVIS_LINEAR_ACCELERATION.value)],
-            SensorFields.PELVIS_MAGNETOMETER.value: self.agt_data.sensordata[
-                self.__get_sensor_name2id(SensorFields.PELVIS_MAGNETOMETER.value)]
-        }
+        sensors_dict = {}
+
+        # Lặp qua các cảm biến định nghĩa trong SensorFields
+        for sensor_field in SensorFields:
+            sensor_name = sensor_field.value
+            sensor_id = self.sensors_map[sensor_name]
+
+            # Lấy thông tin về kích thước (dim) và vị trí (adr) của cảm biến
+            sensor_dim = self.agt_model.sensor_dim[sensor_id]
+            sensor_offset = self.agt_model.sensor_adr[sensor_id]
+
+            # Nếu cảm biến có nhiều giá trị, trích xuất tất cả giá trị
+            if sensor_dim > 1:
+                sensors_dict[sensor_name] = self.agt_data.sensordata[sensor_offset: sensor_offset + sensor_dim]
+            else:
+                sensors_dict[sensor_name] = self.agt_data.sensordata[sensor_offset]
 
         return sensors_dict
 
