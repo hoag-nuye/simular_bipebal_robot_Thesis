@@ -4,13 +4,14 @@ import mujoco
 import mujoco.viewer
 import os
 
-from xml.etree import ElementTree as ET
+from lxml import etree
 from env.mujoco_env import Environment
 
 from env.agent.dataclass_agt import SensorFields
 
 
 class Agent:
+
     # --------------Initial environment--------------------
     def __init__(self, agt_xml):
 
@@ -43,7 +44,7 @@ class Agent:
         print('Setup is done !')
 
 
-    # --------------Show simulation--------------------
+# --------------Show simulation--------------------
     def render(self, viewer):
 
         start_tm = time.time()
@@ -74,7 +75,7 @@ class Agent:
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
 
-    # --------------------Add a new env----------------------
+# --------------------Add a new env----------------------
     def add_env(self, env, env_name):
         # check the agent type
         if not isinstance(env, Environment):
@@ -99,12 +100,13 @@ class Agent:
     # include an env in XML file
     def __include_env_in_xml(self, env_xml, env_name):
         # Phân tích file XML
-        tree = ET.parse(self.agt_xml)
+        parser = etree.XMLParser(remove_blank_text=False, remove_comments=False)
+        tree = etree.parse(self.agt_xml, parser)
         root = tree.getroot()
 
         # Tìm phần tử <include> có thuộc tính 'name' là env_name
         existing_include = None
-        for elem in root.findall("include"):
+        for elem in root.xpath("include"):
             if elem.get("name") == env_name:
                 existing_include = elem
                 break
@@ -114,17 +116,18 @@ class Agent:
             root.remove(existing_include)
 
         # Tạo phần tử <include> mới với thuộc tính 'file' và 'name'
-        include_element = ET.Element("include", file=env_xml.split("/")[-1])
+        include_element = etree.Element("include", file=env_xml.split("/")[-1])
         include_element.attrib['name'] = env_name  # Thiết lập tên cho agent
         include_element.tail = "\n"  # Thêm dấu xuống dòng
 
         # Thêm phần tử include_element vào vị trí đầu của root
         root.insert(0, include_element)
 
-        # Ghi lại file XML
-        tree.write(self.agt_xml, encoding="utf-8", xml_declaration=True)
+        # Ghi lại file XML (giữ nguyên format và comment)
+        with open(self.agt_xml, "wb") as f:
+            tree.write(f, pretty_print=True, encoding="utf-8", xml_declaration=True)
 
-    # ========================= OPERATION INFORMATION ======================
+# ========================= OPERATION INFORMATION ======================
     # trả về tên và index của actuator của agent
     def get_actuators_map(self):
         actuator_map = {}
@@ -145,8 +148,6 @@ class Agent:
 
         return sensor_map
 
-
-    # ---------------------------- STATE --------------------------
     # trả về index của actuator của agent theo tên
     def __get_actuator_name2id(self, name):
         return mujoco.mj_name2id(self.agt_model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
@@ -155,6 +156,7 @@ class Agent:
     def __get_sensor_name2id(self, name):
         return mujoco.mj_name2id(self.agt_model, mujoco.mjtObj.mjOBJ_SENSOR, name)
 
+# ---------------------------- STATE --------------------------
     def get_sensors_info(self):
         """
         Lấy thông tin trạng thái của agent từ các cảm biến của MuJoCo.
