@@ -1,18 +1,21 @@
+import os
 import time
-
 import mujoco
 import mujoco.viewer
-import os
+
+import torch
+import numpy as np
 
 from lxml import etree
 from env.mujoco_env import Environment
 
-from env.agent.dataclass_agt import SensorFields
+from env.agent.support import get_clock
+from env.agent.dataclass_agt import SensorFields, AgentState, StateFields, ActuatorFields
 
 
 class Agent:
 
-    # --------------Initial environment--------------------
+    # ========================= Initial environment =========================
     def __init__(self, agt_xml):
 
         self.agt_xml = agt_xml
@@ -27,11 +30,40 @@ class Agent:
         self.envs = {}
 
         # Create map of variable of MjData
-        self.qpos_map = self.agt_data.qpos
-        self.qvel_map = self.agt_data.qvel
         self.sensors_map = {}
-        self.atr_map = {}
         self.sensors_data = []
+        self.state_map = {}
+        self.atr_map = {}
+        self.atr_ctrl_map = {}
+
+        # Save control signal
+        self.p = None  # clock input
+        self.r = None
+        self.x_des_vel = None  # Control vận tốc theo trục x
+        self.y_des_vel = None  # Control vận tốc theo trục y
+
+        # Save variable of reward (or different meaning is control signal)
+        self.ECfrc_left = None
+        self.ECfrc_right = None
+        self.ECspd_left = None
+        self.ECspd_right = None
+
+        #  Save info of present state
+        self.S_t: AgentState = None  # Trạng thái S_t
+        self.a_t = None  # Hành động a_t
+        self.V_t = None  # Ước tính giá trị S_t : V_t
+        self.a_t_sub1 = []  # Hành động a_t+1
+        self.S_t_add1 = None  # Trạng thái S_t+1
+        self.R_t_add1 = None  # Phần thưởng R_t+1
+
+        self.atr_t = None
+
+        # Save Relay buffer and Trajectory set
+        self.max_batch_size = None
+        self.terminated_training = None
+        self.max_relay_buffer_size = None
+        self.relay_buffer = {}
+        self.trajectory_set = {}
 
         # Setup for agent
         self.__setup()
@@ -39,12 +71,14 @@ class Agent:
     # Save important info of MjData
     def __setup(self):
         self.sensors_map = self.get_sensors_map()
-        self.atr_map = self.get_actuators_map()
         self.sensors_data = self.agt_data.sensordata
+        self.atr_map = self.get_actuators_map()
+        self.state_map = self.__get_map_name2id(StateFields)
+        self.atr_map = self.__get_map_name2id(ActuatorFields)
+        self.atr_ctrl_map = self.get_actuators_map()
         print('Setup is done !')
 
-
-# --------------Show simulation--------------------
+    # ========================= Show simulation =========================
     def render(self, viewer):
 
         start_tm = time.time()
@@ -75,7 +109,7 @@ class Agent:
         if time_until_next_step > 0:
             time.sleep(time_until_next_step)
 
-# --------------------Add a new env----------------------
+    # ========================= Add a new env =========================
     def add_env(self, env, env_name):
         # check the agent type
         if not isinstance(env, Environment):
@@ -127,7 +161,7 @@ class Agent:
         with open(self.agt_xml, "wb") as f:
             tree.write(f, pretty_print=True, encoding="utf-8", xml_declaration=True)
 
-# ========================= OPERATION INFORMATION ======================
+    # ========================= OPERATION INFORMATION ======================
     # trả về tên và index của actuator của agent
     def get_actuators_map(self):
         actuator_map = {}
@@ -156,7 +190,69 @@ class Agent:
     def __get_sensor_name2id(self, name):
         return mujoco.mj_name2id(self.agt_model, mujoco.mjtObj.mjOBJ_SENSOR, name)
 
-# ---------------------------- STATE --------------------------
+    # ========================= STATE =========================
+
+    def get_state(self, time_step):
+        # Tạo một đối tượng mới để lưu trữ trạng thái S_t
+        self.S_t = AgentState(
+            time_step=time_step,
+            joint_positions=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_positions]
+            ]),
+            joint_velocities=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_velocities]
+            ]),
+            left_foot_force=np.array(np.linalg.norm([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_force]
+            ])),
+            right_foot_force=np.array(np.linalg.norm([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_force]
+            ])),
+            pelvis_orientation=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_orientation]
+            ]),
+            pelvis_velocity=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_velocity]
+            ]),
+            pelvis_linear_acceleration=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_linear_acceleration]
+            ]),
+        )
+        # Lưu giá trị actuator hiện tại
+        self.atr_t = np.array([self.agt_data.sensordata[i] for i in self.atr_map[ActuatorFields.actuator_positions]])
+
+    # Tạo mapping cho state fields và sensors
+    def __get_map_name2id(self, dataClass):
+        state_map_dict = {}
+
+        # Lặp qua các trường trong StateFields
+        for state_field in dataClass:
+            # Lấy danh sách các cảm biến của trường
+            sensor_names = state_field.value
+            state_map_dict[state_field] = []  # Khởi tạo danh sách phẳng cho trường này
+
+            for sensor_name in sensor_names:
+                # Tìm ID của cảm biến từ sensors_map
+                state_id = self.sensors_map.get(sensor_name, None)
+                if state_id is not None:
+                    # Lấy thông tin về kích thước (dim) và vị trí (adr) của cảm biến
+                    state_dim = self.agt_model.sensor_dim[state_id]
+                    state_offset = int(self.agt_model.sensor_adr[state_id])
+
+                    # Tạo danh sách các chỉ số cảm biến
+                    if state_dim > 1:
+                        sensor_index = list(range(state_offset, state_offset + state_dim))
+                    else:
+                        sensor_index = [state_offset]
+
+                    # Mở rộng danh sách phẳng
+                    state_map_dict[state_field].extend(sensor_index)
+                else:
+                    # Cảm biến không tồn tại
+                    print(f"Sensor '{sensor_name}' not found in sensors_map.")
+
+        return state_map_dict
+
     def get_sensors_info(self):
         """
         Lấy thông tin trạng thái của agent từ các cảm biến của MuJoCo.
@@ -181,21 +277,29 @@ class Agent:
 
         return sensors_dict
 
-# ---------------------------- ACTION(CONTROL) ----------------------
-# def control(self, action):
-#     """
-#     Điều khiển các động cơ của agent dựa trên action đầu vào.
-#     Input:
-#         action (dict): Dictionary chứa 10 thông số điều khiển, mỗi key là tên động cơ.
-#     """
-#     # Gán các giá trị điều khiển cho động cơ
-#     self.env_data.ctrl[self.actuator_name_to_index("left-hip-roll")] = action["left-hip-roll"]
-#     self.env_data.ctrl[self.actuator_name_to_index("left-hip-yaw")] = action["left-hip-yaw"]
-#     self.env_data.ctrl[self.actuator_name_to_index("left-hip-pitch")] = action["left-hip-pitch"]
-#     self.env_data.ctrl[self.actuator_name_to_index("left-knee")] = action["left-knee"]
-#     self.env_data.ctrl[self.actuator_name_to_index("left-foot")] = action["left-foot"]
-#     self.env_data.ctrl[self.actuator_name_to_index("right-hip-roll")] = action["right-hip-roll"]
-#     self.env_data.ctrl[self.actuator_name_to_index("right-hip-yaw")] = action["right-hip-yaw"]
-#     self.env_data.ctrl[self.actuator_name_to_index("right-hip-pitch")] = action["right-hip-pitch"]
-#     self.env_data.ctrl[self.actuator_name_to_index("right-knee")] = action["right-knee"]
-#     self.env_data.ctrl[self.actuator_name_to_index("right-foot")] = action["right-foot"]
+    # ========================= ACTION CONTROL =========================
+
+    # ========================= REWARD AND CLOCK =========================
+
+    # Tạo clock input, tính toán giá trị phạt cho mỗi pha E_C_frc, E_C_spd
+    def set_clock(self, r, theta_left, theta_right, N=100, kappa=20.0, L=1):
+        self.p, \
+        self.ECfrc_left, \
+        self.ECfrc_right, \
+        self.ECspd_left, \
+        self.ECspd_right = get_clock(r=r,
+                                     theta_left=theta_left,
+                                     theta_right=theta_right,
+                                     N=N,
+                                     kappa=kappa,
+                                     L=L)
+        self.r = r
+    # ========================= SETUP INPUT AND OUTPUT FOR MODEL =========================
+
+    def traj_input(self, x_des, y_des, time_clock):  # current_time: thời điểm thứ i trong clock
+        S_t = torch.cat(self.S_t.as_tensor_list(), dim=0)
+        xy_des = torch.tensor([x_des, y_des])
+        r = torch.tensor([self.r])
+        p = torch.tensor(self.p[time_clock])
+        inputs = torch.cat([S_t, xy_des, r, p], dim=0)
+        return inputs

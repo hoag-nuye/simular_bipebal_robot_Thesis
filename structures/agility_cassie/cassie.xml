@@ -228,12 +228,12 @@
   </equality>
 
   <actuator>
-    
     <motor name="left-hip-roll" joint="left-hip-roll" gear="25" ctrlrange="-4.5 4.5" user="2900"/>
     <motor name="left-hip-yaw" joint="left-hip-yaw" gear="25" ctrlrange="-4.5 4.5" user="2900"/>
     <motor name="left-hip-pitch" joint="left-hip-pitch" gear="16" ctrlrange="-12.2 12.2" user="1300"/>
     <motor name="left-knee" joint="left-knee" gear="16" ctrlrange="-12.2 12.2" user="1300"/>
     <motor name="left-foot" joint="left-foot" gear="50" ctrlrange="-0.9 0.9" user="5500"/>
+
     <motor name="right-hip-roll" joint="right-hip-roll" gear="25" ctrlrange="-4.5 4.5" user="2900"/>
     <motor name="right-hip-yaw" joint="right-hip-yaw" gear="25" ctrlrange="-4.5 4.5" user="2900"/>
     <motor name="right-hip-pitch" joint="right-hip-pitch" gear="16" ctrlrange="-12.2 12.2" user="1300"/>
@@ -279,9 +279,8 @@
 
     <!-- Pelvis sensors -->
     <framequat name="pelvis-orientation" objtype="site" objname="imu"/>
-    <gyro name="pelvis-angular-velocity" site="imu" noise="5e-4" cutoff="34.9"/>
     <accelerometer name="pelvis-linear-acceleration" site="imu" noise="1e-2" cutoff="157"/>
-    <magnetometer name="pelvis-magnetometer" site="imu"/>
+    <velocimeter name="pelvis-velocity" site="imu" noise="1e-3" cutoff="50"/>
   </sensor>
 
 
