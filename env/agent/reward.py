@@ -1,0 +1,75 @@
+import math
+import numpy as np
+from env.agent.dataclass_agt import RewardParam
+
+
+def compute_reward(param: RewardParam):
+    S_t = param.S_t
+    action_t = param.action_t
+    action_t_sub1 = param.action_t_sub1
+    r_swing = param.r_swing
+    tms = S_t.time_step
+    ECfrc_left = param.ECfrc_left[tms]
+    ECfrc_right = param.ECfrc_right[tms]
+    ECspd_left = param.ECspd_left[tms]
+    ECspd_right = param.ECspd_right[tms]
+    x_des = param.x_des
+    y_des = param.y_des
+    quat_des = param.quat_des
+
+    # =========== Hệ số Beta =============
+    beta = 1  # Tránh việc phần thưởng quá nhỏ dẫn đến sự biến mất của đạo hàm
+    # =========== Hệ số omega =============
+    omega = (1 + math.exp(-50 * (r_swing - 0.15))) ** (-1)
+    # =========== Tính R of Bipedal ==========
+    q_left_frc = 1 - math.exp(-omega * np.linalg.norm(S_t.left_foot_force) ** 2 / 100)
+    q_right_frc = 1 - math.exp(-omega * np.linalg.norm(S_t.right_foot_force) ** 2 / 100)
+    q_left_spd = 1 - math.exp(-2 * omega * np.linalg.norm(S_t.left_foot_speed) ** 2)
+    q_right_spd = 1 - math.exp(-2 * omega * np.linalg.norm(S_t.left_foot_speed) ** 2)
+
+    r_bipedal = ECfrc_left * q_left_frc \
+              + ECfrc_right * q_right_frc \
+              + ECspd_left * q_left_spd \
+              + ECspd_right * q_right_spd
+    # =========== Tính R of Cmd ==========
+    q_x = 1 - math.exp(-2 * omega * abs(x_des - S_t.pelvis_velocity[0]))
+    q_y = 1 - math.exp(-2 * omega * abs(y_des - S_t.pelvis_velocity[1]))
+    q_orientation = 1 - math.exp(-3 * (1 - np.dot(S_t.pelvis_orientation, quat_des) ** 2))  # quaternion
+
+    r_cmd = (-1) * q_x \
+          + (-1) * q_y \
+          + (-1) * q_orientation
+    # =========== Tính R of Smooth ==========
+    q_action_diff = 1 - math.exp(-5 * np.linalg.norm(action_t - action_t_sub1))
+    q_torque = 1 - math.exp(-0.05 * np.linalg.norm(action_t))
+    q_pelvis_acc = 1 - math.exp(-0.10 * (np.linalg.norm(S_t.pelvis_angular_velocity)
+                                         + np.linalg.norm(S_t.pelvis_linear_acceleration)))
+
+    r_smooth = (-1) * q_action_diff \
+             + (-1) * q_torque \
+             + (-1) * q_pelvis_acc
+    # =========== Tính R of Standing cost ==========
+    w = S_t.pelvis_orientation[0]
+    x = S_t.pelvis_orientation[1]
+    y = S_t.pelvis_orientation[2]
+    z = S_t.pelvis_orientation[3]
+
+    # Tính Roll
+    roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x ** 2 + y ** 2))
+    # Tính Pitch
+    pitch = np.arcsin(2 * (w * y - z * x))
+    # Tính err_sym : Symmetry Error
+    err_sym = abs(roll) + abs(pitch)
+
+    q_std_cost = 1 - math.exp(-(err_sym + 20 * q_action_diff))
+
+    r_std_cost = (omega - 1) * q_std_cost
+
+    # ============== TÍNH R Multi ==============
+    R_multi = 0.400 * r_bipedal \
+            + 0.300 * r_cmd \
+            + 0.100 * r_smooth \
+            + 0.100 * r_std_cost \
+            + beta
+
+    return R_multi

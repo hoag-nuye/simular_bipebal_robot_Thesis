@@ -23,6 +23,8 @@ def critic_loss(y_true, y_pred):
 # Mô hình Actor sử dụng LSTM
 class Actor(nn.Module):
     def __init__(self, input_size, output_size, dropout_rate=0.2):
+        self.input_size = input_size
+        self.output_size = output_size
         super(Actor, self).__init__()
         self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
         self.norm1 = nn.LayerNorm(128)  # Chuẩn hóa layer để tăng ổn định
@@ -30,8 +32,8 @@ class Actor(nn.Module):
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
         self.norm2 = nn.LayerNorm(128)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.projection = nn.Linear(128, 64)  # Giảm chiều đầu ra
-        self.output_layer = nn.Linear(64, output_size)  # Dự đoán giá trị đầu ra cuối cùng
+        self.projection = nn.Linear(128, 128)  # Giảm chiều đầu ra nhưng vì đầu ra là 80 nên không cần giảm
+        self.output_layer = nn.Linear(128, output_size)  # Dự đoán giá trị đầu ra cuối cùng
 
     def forward(self, x):
         x, _ = self.lstm1(x)  # Đầu vào qua LSTM1
