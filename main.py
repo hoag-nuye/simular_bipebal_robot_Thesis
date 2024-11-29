@@ -185,6 +185,9 @@ def main(use_cuda=False):
                         agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
                         agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
 
+            # Đếm số bước mô phỏng
+            steps_counter_sim += 1
+
 
 # ================== RUN MAIN =======================
 if __name__ == "__main__":
