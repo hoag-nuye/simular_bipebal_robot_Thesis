@@ -8,11 +8,11 @@ def compute_reward(param: RewardParam):
     action_t = param.action_t
     action_t_sub1 = param.action_t_sub1
     r_swing = param.r_swing
-    tms = S_t.time_step
-    ECfrc_left = param.ECfrc_left[tms]
-    ECfrc_right = param.ECfrc_right[tms]
-    ECspd_left = param.ECspd_left[tms]
-    ECspd_right = param.ECspd_right[tms]
+    tms_clk = param.tms_clk
+    ECfrc_left = param.ECfrc_left[tms_clk]
+    ECfrc_right = param.ECfrc_right[tms_clk]
+    ECspd_left = param.ECspd_left[tms_clk]
+    ECspd_right = param.ECspd_right[tms_clk]
     x_des = param.x_des
     y_des = param.y_des
     quat_des = param.quat_des

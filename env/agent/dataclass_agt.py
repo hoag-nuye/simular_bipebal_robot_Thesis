@@ -165,6 +165,7 @@ class RewardParam:
     action_t: np.ndarray
     action_t_sub1: np.ndarray
     r_swing: float
+    tms_clk: int
     ECfrc_left: float
     ECfrc_right: float
     ECspd_left: float

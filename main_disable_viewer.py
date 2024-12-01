@@ -160,6 +160,7 @@ def train(training_id, data_batch, epochs, learning_rate, output_size, path_dir,
 
     ppo_clip_training.train()
 
+
 """
 ============================================================
 -------------------------- MAIN ----------------------------
@@ -176,7 +177,6 @@ def main(use_cuda=False):
     env = Environment('structures/agility_cassie/environment.xml', agt.agt_data)
     agt.add_env(env, 'cassie_env')
     agt.set_state(0)  # Khởi tạo giá trị ban đầu
-
 
     # ======================== THU THẬP 32 TRAJECTORY =======================
     # Tạo tham số cho lần thua thập
@@ -241,105 +241,103 @@ def main(use_cuda=False):
     # ------------------------ SIMULAR ----------------------
     called_once = True
     # Create viewer with UI options
-    with mujoco.viewer.launch_passive(agt.agt_model, agt.agt_data, show_left_ui=True, show_right_ui=True) as viewer:
-        # Bắt đầu đo thời gian
-        start_time = time.time()
-        # ------------ RUNNING ------------------
-        while viewer.is_running():
+    # Bắt đầu đo thời gian
+    start_time = time.time()
 
-            agt.render(viewer)
+    # ------------ RUNNING ------------------
+    while True:
+        # Thu thập được 1 trajectory thì lặp lại và dừng khi đủ số lượng traj cần thu thập
+        if traj_counter < num_traj and \
+                ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
 
-            # Thu thập được 1 trajectory thì lặp lại và dừng khi đủ số lượng traj cần thu thập
-            if traj_counter < num_traj and \
-                    ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
+            # Cứ sau num_clock timesteps thì lại đếm lại
+            if timestep_clock_counter < num_clock:
 
-                # Cứ sau num_clock timesteps thì lại đếm lại
-                if timestep_clock_counter < num_clock:
+                # -------- Điều khiển agent khi ở trạng thái S_t --------
+                if is_control:
+                    action, mu, sigma, control = process_action(
+                        agent=agt,
+                        actor=Actor_traj,
+                        sample_id=samples_of_traj_counter,
+                        tms_clk=timestep_clock_counter
+                    )
+                    # Thiết lập mô men điều khiển cho agent
+                    agt.control_agent(control)
+                    is_control = False
 
-                    # -------- Điều khiển agent khi ở trạng thái S_t --------
-                    if is_control:
-                        action, mu, sigma, control = process_action(
-                            agent=agt,
-                            actor=Actor_traj,
-                            sample_id=samples_of_traj_counter,
-                            tms_clk=timestep_clock_counter
-                        )
-                        # Thiết lập mô men điều khiển cho agent
-                        agt.control_agent(control)
-                        is_control = False
+                # -------- Tiếp tục mô phỏng quá trình điều khiển --------
+                if steps_per_policy_counter < steps_per_policy:
+                    steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
+                    mujoco.mj_step(agt.agt_model, agt.agt_data)
+                    continue
 
-                    # -------- Tiếp tục mô phỏng quá trình điều khiển --------
-                    if steps_per_policy_counter < steps_per_policy:
-                        steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
-                        continue
+                steps_per_policy_counter = 0  # Trả lại trạng thái đợi mô phỏng
+                is_control = True  # Trả lại trạng thái tính toán a_t
+                #  ------- Thu thập trạng thái S_t+1 và tính r_t+1-------------
+                print(f"Trajectory: {traj_counter} "
+                      f"- Time step: {samples_of_traj_counter} "
+                      f"- Clock time: {timestep_clock_counter}")
+                # Thu thập 1 sample
+                collect_and_store(agent=agt,
+                                  buffer=buffer,
+                                  critic=Critic_traj,
+                                  traj_id=traj_total_counter,
+                                  sample_id=samples_of_traj_counter,
+                                  tms_clk=timestep_clock_counter,
+                                  action=action,
+                                  mu=mu,
+                                  sigma=sigma)
 
-                    steps_per_policy_counter = 0  # Trả lại trạng thái đợi mô phỏng
-                    is_control = True  # Trả lại trạng thái tính toán a_t
-                    #  ------- Thu thập trạng thái S_t+1 và tính r_t+1-------------
-                    print(f"Trajectory: {traj_counter} "
-                          f"- Time step: {samples_of_traj_counter} "
-                          f"- Clock time: {timestep_clock_counter}")
-                    # Thu thập 1 sample
-                    collect_and_store(agent=agt,
-                                      buffer=buffer,
-                                      critic=Critic_traj,
-                                      traj_id=traj_total_counter,
-                                      sample_id=samples_of_traj_counter,
-                                      tms_clk=timestep_clock_counter,
-                                      action=action,
-                                      mu=mu,
-                                      sigma=sigma)
-
-                    timestep_clock_counter += 1
-                    samples_of_traj_counter += 1  # Đếm số lượng sample nhưng không reset khi hết 1 clock
-                else:
-                    timestep_clock_counter = 0  # Bắt đầu 1 timestep mới của clock
-
+                timestep_clock_counter += 1
+                samples_of_traj_counter += 1  # Đếm số lượng sample nhưng không reset khi hết 1 clock
             else:
-                if traj_counter >= num_traj and called_once:  # Nếu kết thúc số lượng traj cần thu thập
-                    # traj_counter = 0 # Bắt đầu lần thu thập mới
-                    # lưu dữ liệu cũ
-                    print("DONE")
-                    if called_once:
-                        buffer.compute_returns_and_advantages()
-                        buffer.update_td_errors()
-                        buffer.save_to_pkl()
-                        buffer.reset()
-                        called_once = False
+                timestep_clock_counter = 0  # Bắt đầu 1 timestep mới của clock
 
-                        data_batch = buffer.sample_batch(batch_size=num_traj)
-                        for k, v in data_batch.items():
-                            print(f"Size of {k} is: {len(v)}, shape:{v.shape} ({type(v)})")
+        else:
+            if traj_counter >= num_traj and called_once:  # Nếu kết thúc số lượng traj cần thu thập
+                # traj_counter = 0 # Bắt đầu lần thu thập mới
+                # lưu dữ liệu cũ
+                print("DONE")
+                if called_once:
+                    buffer.compute_returns_and_advantages()
+                    buffer.update_td_errors()
+                    buffer.save_to_pkl()
+                    buffer.reset()
+                    called_once = False
 
-                        """
-                        ============================================================
-                        QUÁ TRÌNH TRAIN DIỄN RA SAU 1 LẦN THU THẬP ĐỦ SỐ LƯỢNG BATCH
-                        ============================================================
-                        """
+                    data_batch = buffer.sample_batch(batch_size=num_traj)
+                    for k, v in data_batch.items():
+                        print(f"Size of {k} is: {len(v)}, shape:{v.shape} ({type(v)})")
 
-                        # train(training_id=train_counter,
-                        #       data_batch=data_batch,
-                        #       epochs=4,
-                        #       learning_rate=0.0001,
-                        #       output_size=traj_output_size,
-                        #       path_dir="models/param",
-                        #       use_cuda=use_cuda)
-                        # train_counter += 1
+                    """
+                    ============================================================
+                    QUÁ TRÌNH TRAIN DIỄN RA SAU 1 LẦN THU THẬP ĐỦ SỐ LƯỢNG BATCH
+                    ============================================================
+                    """
 
-                        # Kết thúc đo thời gian
-                        end_time = time.time()
-                        # Tính toán và in ra thời gian chạy
-                        execution_time = end_time - start_time
-                        print(f"Thời gian thực hiện COLLECTION & TRAIN: {execution_time} s")
+                    # train(training_id=train_counter,
+                    #       data_batch=data_batch,
+                    #       epochs=4,
+                    #       learning_rate=0.0001,
+                    #       output_size=traj_output_size,
+                    #       path_dir="models/param",
+                    #       use_cuda=use_cuda)
+                    # train_counter += 1
 
-                elif not ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
-                    print("DONE A TRAJECTORY!")
-                    samples_of_traj_counter = 0  # Bắt đầu 1 trajectory mới
-                    traj_counter += 1  # Bắt đầu 1 trajectory mới
-                    traj_total_counter += 1  # Bắt đầu 1 trajectory mới
-                    # Tín hiệu điều khiển mới
-                    agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
-                    agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
+                    # Kết thúc đo thời gian
+                    end_time = time.time()
+                    # Tính toán và in ra thời gian chạy
+                    execution_time = end_time - start_time
+                    print(f"Thời gian thực hiện COLLECTION & TRAIN: {execution_time} s")
+
+            elif not ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
+                print("DONE A TRAJECTORY!")
+                samples_of_traj_counter = 0  # Bắt đầu 1 trajectory mới
+                traj_counter += 1  # Bắt đầu 1 trajectory mới
+                traj_total_counter += 1  # Bắt đầu 1 trajectory mới
+                # Tín hiệu điều khiển mới
+                agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
+                agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
 
 
 # ================== RUN MAIN =======================
