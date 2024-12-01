@@ -4,18 +4,12 @@ import torch
 import numpy as np
 from collections import deque, defaultdict
 
+# ========================== SUPERCLASS =================
 
-class ReplayBuffer:
-    def __init__(self,
-                 trajectory_size=32 * 300,
-                 max_size=50000,
-                 gamma=0.99, lam=0.95, alpha=0.6,
-                 file_path="replay_buffer"
-                           ".pkl"):
-        """
-        trajectory_size: Số lượng mẫu cần thu thập mỗi lần huấn luyện.
-        max_size: Kích thước tối đa của buffer khi lưu toàn bộ vào ổ cứng.
-        """
+
+class Buffer:
+    def __init__(self, trajectory_size=32 * 300,
+                 max_size=50000):
         self.trajectory_size = trajectory_size  # Kích thước của buffer trong mỗi lần thu thập
         self.max_size = max_size  # Kích thước tối đa khi lưu trữ
         self.buffer = {
@@ -28,18 +22,6 @@ class ReplayBuffer:
             "trajectory_ids": deque(maxlen=trajectory_size),
             "td_errors": deque(maxlen=trajectory_size),  # Chỉ giữ TD-error cho trajectory_size
         }
-        self.gamma = gamma
-        self.lam = lam
-        self.alpha = alpha
-        self.mean_td_error = 0
-        self.file_path = file_path  # Đường dẫn lưu buffer vào ổ cứng
-
-        # Kiểm tra nếu file tồn tại và xóa nó
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print(f"File {file_path} đã được xóa.")
-        else:
-            print(f"File {file_path} không tồn tại.")
 
     def add_sample(self, state, action, reward, log_prob, sigma, value, trajectory_id):
         """Thêm một mẫu vào buffer nhỏ (RAM)."""
@@ -50,7 +32,65 @@ class ReplayBuffer:
         self.buffer["sigma"].append(sigma)
         self.buffer["values"].append(value)
         self.buffer["trajectory_ids"].append(trajectory_id)
-        self.buffer["td_errors"].append(0)
+
+    def get_samples(self):
+        return self.buffer
+
+# ========================== RELAY BUFFER LỚN =======================
+
+
+class ReplayBuffer(Buffer):
+    def __init__(self,
+                 trajectory_size=32 * 300,
+                 max_size=50000,
+                 gamma=0.99, lam=0.95, alpha=0.6,
+                 file_path="replay_buffer"
+                           ".pkl"):
+        """
+        trajectory_size: Số lượng mẫu cần thu thập mỗi lần huấn luyện.
+        max_size: Kích thước tối đa của buffer khi lưu toàn bộ vào ổ cứng.
+        """
+
+        self.gamma = gamma
+        self.lam = lam
+        self.alpha = alpha
+        self.mean_td_error = 0
+        self.file_path = file_path  # Đường dẫn lưu buffer vào ổ cứng
+
+        # Gọi hàm __init__ của class Buffer để khởi tạo buffer
+        super().__init__(trajectory_size, max_size)
+
+        # Kiểm tra nếu file tồn tại và xóa nó
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"File {file_path} đã được xóa.")
+        else:
+            print(f"File {file_path} không tồn tại.")
+
+    def append_from_buffer(self, buffer):
+        """
+        Thêm toàn bộ dữ liệu từ buffer đầu vào vào buffer hiện tại.
+
+        Args:
+            buffer (dict): Buffer đầu vào phải có cấu trúc tương tự với buffer hiện tại.
+        """
+        # Kiểm tra xem buffer đầu vào có đầy đủ các khóa không
+        required_keys = ["states", "actions", "rewards", "log_probs", "sigma", "values", "trajectory_ids"]
+        for key in required_keys:
+            if key not in buffer:
+                raise ValueError(f"Buffer đầu vào thiếu khóa: {key}")
+
+        # Duyệt qua từng mẫu trong buffer đầu vào và thêm vào buffer hiện tại
+        for i in range(len(buffer["states"])):  # Giả định mọi danh sách đều có cùng độ dài
+            self.add_sample(
+                state=buffer["states"][i],
+                action=buffer["actions"][i],
+                reward=buffer["rewards"][i],
+                log_prob=buffer["log_probs"][i],
+                sigma=buffer["sigma"][i],
+                value=buffer["values"][i],
+                trajectory_id=buffer["trajectory_ids"][i],
+            )
 
     def update_td_errors(self):
         """Cập nhật TD-error trong buffer nhỏ."""
@@ -302,3 +342,14 @@ class ReplayBuffer:
         """Reset buffer nhỏ trong RAM."""
         for key in self.buffer:
             self.buffer[key] = deque(maxlen=self.trajectory_size)
+
+
+# ========= REPLAY CÓ KÍCH THƯỚC NHỎ ĐỂ CHẠY ĐA LUỒNG =============
+class ReplayCache(Buffer):
+    def __init__(self, trajectory_size=4 * 300, max_size=6.250):
+        # Gọi hàm __init__ của class Buffer để khởi tạo buffer
+        super().__init__(trajectory_size, max_size)
+
+
+
+

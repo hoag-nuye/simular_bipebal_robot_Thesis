@@ -1,12 +1,10 @@
+import os
 import multiprocessing
-import torch
+# Số lõi logic (logical cores)
+logical_cores = os.cpu_count()
+print(f"Số logical cores: {logical_cores}")
 
-def check_max_threads():
-    max_threads = multiprocessing.cpu_count()  # Số luồng tối đa mà hệ thống hỗ trợ
-    print(f"Số lượng luồng tối đa mà máy tính của bạn có thể chạy: {max_threads}")
-    return max_threads
+# Số lõi vật lý (physical cores)
+physical_cores = multiprocessing.cpu_count()
+print(f"Số physical cores: {physical_cores}")
 
-
-# Kiểm tra số luồng tối đa
-# check_max_threads()
-print(torch.cuda.is_available())
