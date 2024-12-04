@@ -67,6 +67,7 @@ class Agent:
         self.V_t = None  # Ước tính giá trị S_t : V_t
         self.a_t_sub1 = []  # Hành động a_t-1
         self.R_t_add1 = None  # Phần thưởng R_t+1
+        self.total_samples = 0
 
         # Save info of control
         self.atr_num = None
@@ -335,7 +336,7 @@ class Agent:
         return ctrl_ranges
 
     # Tính toán torque
-    def control_signal_complex(self, mu, sigma, q, qd):
+    def control_signal_complex(self, mu, sigma, q, qd, exploration_noise_std=1e-1):
         """
         Hàm tính toán torque điều khiển từ các giá trị mu và sigma dựa trên số actuator.
 
@@ -355,6 +356,14 @@ class Agent:
         assert sigma.shape[-1] == self.atr_num * 3, "Số lượng sigma không khớp với số actuator * 3."
         assert q.shape[0] == self.atr_num, "Số actuator trong q không khớp với current_actuator."
         assert qd.shape[0] == self.atr_num, "Số actuator trong qd không khớp với current_actuator."
+
+        # Tạo noise Gaussian để thêm vào mu và sigma
+        noise_mu = torch.normal(mean=torch.zeros_like(mu), std=exploration_noise_std)
+        noise_sigma = torch.normal(mean=torch.zeros_like(sigma), std=exploration_noise_std)
+
+        # Thêm noise vào mu và sigma
+        mu = mu + noise_mu
+        sigma = sigma + noise_sigma
 
         # Tách mu và sigma
         pTarget_mu, dTarget_mu = mu[:, :, : self.atr_num], mu[:, :, :self.atr_num]

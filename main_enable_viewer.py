@@ -199,7 +199,6 @@ def main(use_cuda=False):
     steps_per_policy_counter = 0  # Đếm số bước mô phỏng
 
     # ------------------ CÁC BIẾN ĐẾM -----------------------------
-    train_counter = 0
     traj_total_counter = 0  # Đếm số trajectory đã thu thập được trong suốt quá trình huấn luyện 1 policy
     traj_counter = 0  # Đếm số trajectory đã được thu thập trong 1 lần thu thập (32 traj) để huấn luyện
     timestep_clock_counter = 0  # Đếm số timestep đã đi qua trong clock (< num_clock)

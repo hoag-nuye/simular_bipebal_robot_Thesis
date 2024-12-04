@@ -27,29 +27,28 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None,
     Returns:
         loss (Tensor): Giá trị loss trung bình.
     """
-    # Tính ratio (dựa trên input nào được cung cấp)
     if new_log_probs is not None and old_log_probs is not None:
+        # Tính ratio
         ratios = torch.exp(new_log_probs - old_log_probs)
     else:
         raise ValueError("Phải cung cấp (new_log_probs, old_log_probs)")
 
-    # Clipping ratio
+        # Clipping ratio
     clipped_ratios = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
 
     # Tính surrogate loss
     surrogate_loss = torch.min(ratios * advantage, clipped_ratios * advantage)
 
-    # Tính entropy (nếu có sigma_sq)
+    # Tính entropy
     if sigma is not None:
+        sigma = torch.clamp(sigma, min=1e-3, max=10.0)  # Kiểm soát sigma
         entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma), dim=1)
     else:
-        entropy = torch.zeros_like(surrogate_loss)  # Không tính entropy nếu không có sigma_sq
+        entropy = torch.zeros_like(surrogate_loss)
 
     # Tổng hợp loss
     loss = -torch.mean(surrogate_loss) + entropy_weight * torch.mean(entropy)
-
     return loss
-
 
 def ppo_loss_critic(predicted_values, returns):
     """
@@ -126,8 +125,10 @@ class Actor(nn.Module):
 
     # Tải trạng thái mô hình
     def load_model(self, path):
-        self.load_state_dict(torch.load(path))
-        self.eval()  # tắt dropout và batch normalization, vì chúng chỉ cần thiết trong quá trình huấn luyện.
+        with open(path, 'rb') as f:  # Đảm bảo file được đóng sau khi load
+            model_state = torch.load(f)
+        self.load_state_dict(model_state)
+        self.eval()  # tắt dropout và batch normalization
 
 
 # Mô hình Critic sử dụng LSTM
@@ -187,7 +188,7 @@ class PPOClip_Training:
                  returns,
                  advantages,
                  epsilon=0.2,
-                 entropy_weight=0.1,
+                 entropy_weight=0.01,
                  num_epochs=4,
                  learning_rate=0.0001,
                  path_dir="models/param/"
@@ -242,6 +243,9 @@ class PPOClip_Training:
             # Tính log-probabilities mới
             new_log_probs = compute_log_pi(self.actions, mu, sigma).unsqueeze(-1)  # Thêm chiều để khớp shape
 
+            # Chuẩn hóa advantages
+            self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+
             # Tính loss
             actor_loss = ppo_loss_actor(advantage=self.advantages,
                                         new_log_probs=new_log_probs,
@@ -254,7 +258,7 @@ class PPOClip_Training:
             actor_loss.backward()  # Tính gradient cho Actor
             self.actor_optimizer.step()  # Cập nhật tham số của Actor
 
-            # ** Huấn luyện Actor **
+            # ** ------------- Huấn luyện Critic -----------------*
             # Backward Critic
             # Forward qua model để tính các giá trị mới
             predict_critic = self.critic(self.states)

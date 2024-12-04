@@ -20,7 +20,6 @@ class Buffer:
             "sigma": deque(maxlen=trajectory_size),
             "values": deque(maxlen=trajectory_size),
             "trajectory_ids": deque(maxlen=trajectory_size),
-            "td_errors": deque(maxlen=trajectory_size),  # Chỉ giữ TD-error cho trajectory_size
         }
 
     def add_sample(self, state, action, reward, log_prob, sigma, value, trajectory_id):
@@ -109,28 +108,37 @@ class ReplayBuffer(Buffer):
         self.mean_td_error = np.mean(td_errors)
 
     def compute_returns_and_advantages(self):
-        """Tính toán returns và advantages trong buffer nhỏ."""
-        returns = []
-        advantages = []
-        G = 0
-        advantage = 0
+        """Tính toán returns và advantages trong buffer nhỏ theo GAE (λ=1)."""
+        returns = deque(maxlen=self.trajectory_size)
+        advantages = deque(maxlen=self.trajectory_size)
+        T = len(self.buffer["rewards"])  # Số bước trong trajectory hiện tại
 
-        for t in reversed(range(len(self.buffer["rewards"]))):
-            if (t == len(self.buffer["rewards"]) - 1 or
-                    self.buffer["trajectory_ids"][t] != self.buffer["trajectory_ids"][t + 1]):
-                G = self.buffer["values"][t]
-                advantage = 0
+        # Lấy giá trị Value cuối cùng
+        next_value = 0  # Giá trị V(s_T) (ở ngoài trajectory)
 
-            next_value = 0 if t == len(self.buffer["rewards"]) - 1 else self.buffer["values"][t + 1]
+        # Duyệt ngược qua trajectory
+        for t in reversed(range(T)):
+            # Nếu là bước cuối cùng của một trajectory khác (trajectory IDs khác nhau):
+            if t == T - 1 or self.buffer["trajectory_ids"][t] != self.buffer["trajectory_ids"][t + 1]:
+                next_value = 0  # Không có giá trị tiếp theo
+
+            # Tính delta_t
             delta = self.buffer["rewards"][t] + self.gamma * next_value - self.buffer["values"][t]
-            advantage = delta + self.gamma * self.lam * advantage
-            advantages.insert(0, advantage)
 
+            # Tính advantage dựa trên công thức GAE
+            advantage = delta + self.gamma * self.lam * (advantages[0] if advantages else 0)
+            advantages.appendleft(advantage)
+
+            # Tính return G_t
             G = advantage + self.buffer["values"][t]
-            returns.insert(0, G)
+            returns.appendleft(G)
 
-        self.buffer["returns"] = deque(returns, maxlen=self.trajectory_size)
-        self.buffer["advantages"] = deque(advantages, maxlen=self.trajectory_size)
+            # Cập nhật giá trị cho bước tiếp theo
+            next_value = self.buffer["values"][t]
+
+        # Ghi kết quả vào buffer
+        self.buffer["returns"] = returns
+        self.buffer["advantages"] = advantages
 
     def save_to_pkl(self):
         """Lưu buffer vào file .pkl, xóa mẫu cũ nhất nếu vượt quá max_size."""
@@ -151,7 +159,6 @@ class ReplayBuffer(Buffer):
                             # Load một phần dữ liệu từ file gốc
                             data = pickle.load(original_file)
                             # Xóa phần tử cũ nếu vượt quá max_size
-                            print(len(data["states"]), self.max_size - current_buffer_size)
                             for key in data:
                                 while len(data[key]) > 0 and samples_written + len(
                                         data[key]) > self.max_size - current_buffer_size:
@@ -299,6 +306,7 @@ class ReplayBuffer(Buffer):
             "advantages": np.array([buffer_large["advantages"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
             "trajectory_ids": np.array([buffer_large["trajectory_ids"][i] for i in selected_indices]),
         }
+
 
         # ================== TẠO ĐẦU VÀO CHO VIỆC HUẤN LUYỆN ===============
         """

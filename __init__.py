@@ -8,3 +8,4 @@ print(f"Số logical cores: {logical_cores}")
 physical_cores = multiprocessing.cpu_count()
 print(f"Số physical cores: {physical_cores}")
 
+print(multiprocessing)
