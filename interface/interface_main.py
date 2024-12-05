@@ -47,13 +47,10 @@ def process_action(agent: Agent, actor: Actor, sample_id: int, tms_clk: int):
 
     # Tạo đầu vào cho Actor
     traj_input_model = agent.traj_input(agent.x_des_vel, agent.y_des_vel, tms_clk).float()
-    traj_output_model = actor(traj_input_model).detach()
-
     # Lấy `mu` và `sigma` từ Actor để tính toán hành động
-    _range = int(actor.output_size / 2)
-    mu = traj_output_model[:, :, :_range]
-    raw_sigma = traj_output_model[:, :, _range:]
-    sigma = torch.log(1 + torch.exp(raw_sigma))  # Áp dụng Softplus
+    mu, sigma = actor(traj_input_model)
+    mu = mu.detach()
+    sigma = sigma.detach()
 
     # Tính toán tín hiệu điều khiển và hành động
     control, action = agent.control_signal_complex(mu, sigma,
@@ -126,7 +123,7 @@ def trajectory_collection(traj_id_start,
                           num_steps_per_policy,
                           agt: Agent,
                           traj_input_size, traj_output_size,
-                          buffer_path_dir,
+                          param_path_dir,
                           use_cuda,
                           buffer: ReplayCache):
     # ------------------ CÁC BIẾN ĐẾM -----------------------------
@@ -141,14 +138,16 @@ def trajectory_collection(traj_id_start,
     Actor_traj = Actor(input_size=traj_input_size, output_size=traj_output_size).to(device)
     Critic_traj = Critic(input_size=traj_input_size).to(device)
     # Tải Actor và Critic mới nhất
-    actor_path = find_latest_model("actor_epoch_", directory=buffer_path_dir)
-    critic_path = find_latest_model("critic_epoch_", directory=buffer_path_dir)
+    # actor_path = find_latest_model("actor_epoch_", directory=param_path_dir)
+    # critic_path = find_latest_model("critic_epoch_", directory=param_path_dir)
+    actor_path = find_latest_model("actor_epoch_latest", directory=param_path_dir)
+    critic_path = find_latest_model("critic_epoch_latest", directory=param_path_dir)
     if actor_path:
         Actor_traj.load_model(actor_path)
-        print(f"Loaded latest Actor model: {actor_path}")
+        # print(f"Loaded latest Actor model: {actor_path}")
     if critic_path:
         Critic_traj.load_model(critic_path)
-        print(f"Loaded latest Critic model: {critic_path}")
+        # print(f"Loaded latest Critic model: {critic_path}")
     # ------------------------ SIMULAR ----------------------
     is_control = True  # Kiểm tra xem đã điều khiển agent chưa
     # Create viewer with UI options
@@ -210,7 +209,6 @@ def trajectory_collection(traj_id_start,
                 # print("__DONE__")
                 buffer_result = buffer
 
-
             # Kết thúc quá trình thu thập 1 trải nghiệm
             elif not ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
                 samples_of_traj_counter = 0  # Bắt đầu 1 trajectory mới
@@ -260,6 +258,7 @@ def train(training_id, data_batch, epochs, learning_rate, output_size, path_dir,
                                          actions=data_batch["actions"],
                                          log_probs=data_batch["log_probs"],
                                          sigma=data_batch["sigma"],
+                                         rewards=data_batch["rewards"],
                                          returns=data_batch["returns"],
                                          advantages=data_batch["advantages"],
                                          epsilon=0.2,

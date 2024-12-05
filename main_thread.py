@@ -9,6 +9,7 @@ from env.mujoco_env import Environment
 from env.agent.mujoco_agt import Agent
 from env.agent.buffer import ReplayBuffer, ReplayCache
 from interface.interface_main import trajectory_collection, train
+from interface.plot_param import plot_param_process
 
 
 # Hàm được gọi bởi mỗi tiến trình
@@ -67,6 +68,13 @@ if __name__ == "__main__":
     num_traj = 8  # Số trajectory cần thu thập cho mỗi luồng
     num_samples_traj = 300  # Số samples tối đa trong 1 trajectory
 
+    # Tạo tham số cho mô hình Actor và Critic
+    traj_input_size = 42
+    traj_output_size = 60
+    # Tạo replay_cache
+    buffer_path_dir = 'env/agent/'
+    param_path_dir = 'models/param/'
+
     for num_train in range(4):  # 2 số lần thu thập 32 trajectory
 
         # Create clock for agent and control
@@ -79,12 +87,6 @@ if __name__ == "__main__":
         agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
 
         # ----------------- THU THẬP TRẢI NGHIỆM -----------------
-
-        # Tạo tham số cho mô hình Actor và Critic
-        traj_input_size = 42
-        traj_output_size = 60
-        # Tạo replay_cache
-        buffer_path_dir = 'env/agent/'
 
         # Chuẩn bị tham số cho Pool
         tasks = []
@@ -103,7 +105,7 @@ if __name__ == "__main__":
                                      agt=agt_copy,
                                      traj_input_size=traj_input_size,
                                      traj_output_size=traj_output_size,
-                                     buffer_path_dir=buffer_path_dir,
+                                     param_path_dir=param_path_dir,
                                      use_cuda=use_cuda,
                                      buffer=replay_cache)
 
@@ -143,13 +145,14 @@ if __name__ == "__main__":
               epochs=4,
               learning_rate=0.0001,
               output_size=traj_output_size,
-              path_dir="models/param",
+              path_dir="models/param/",
               use_cuda=use_cuda)
 
     end_time = time.time()
     execution_time = end_time - start_time
     print(execution_time)
     print(agt.total_samples)
+    plot_param_process(path_dir=param_path_dir)
 
 """ 
 ============================================================

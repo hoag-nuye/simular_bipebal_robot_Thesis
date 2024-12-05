@@ -350,6 +350,8 @@ class Agent:
 
         Returns:
             torch.Tensor: Torque sau khi tính toán và clip theo `ctrl_ranges`.
+            :param exploration_noise_std: Hệ số noise cho phép agent không phụ thuộc quá nhiều
+            vào sigma -> tăng khám phá
         """
         # Kiểm tra điều kiện đầu vào
         assert mu.shape[-1] == self.atr_num * 3, "Số lượng mu không khớp với số actuator * 3."
@@ -361,9 +363,10 @@ class Agent:
         noise_mu = torch.normal(mean=torch.zeros_like(mu), std=exploration_noise_std)
         noise_sigma = torch.normal(mean=torch.zeros_like(sigma), std=exploration_noise_std)
 
+
         # Thêm noise vào mu và sigma
         mu = mu + noise_mu
-        sigma = sigma + noise_sigma
+        sigma = torch.clamp(sigma + noise_sigma, min=1e-3)  # Đảm bảo sigma không âm
 
         # Tách mu và sigma
         pTarget_mu, dTarget_mu = mu[:, :, : self.atr_num], mu[:, :, :self.atr_num]

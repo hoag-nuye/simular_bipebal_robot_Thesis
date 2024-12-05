@@ -33,7 +33,7 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None,
     else:
         raise ValueError("Phải cung cấp (new_log_probs, old_log_probs)")
 
-        # Clipping ratio
+    # Clipping ratio
     clipped_ratios = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
 
     # Tính surrogate loss
@@ -41,7 +41,7 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None,
 
     # Tính entropy
     if sigma is not None:
-        sigma = torch.clamp(sigma, min=1e-3, max=10.0)  # Kiểm soát sigma
+        sigma = torch.clamp(sigma, min=1e-3)  # Kiểm soát sigma ko được âm
         entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma), dim=1)
     else:
         entropy = torch.zeros_like(surrogate_loss)
@@ -109,8 +109,20 @@ class Actor(nn.Module):
         x, _ = self.lstm2(x)  # Đầu vào qua LSTM2
         x = self.norm2(x)
         x = self.dropout2(x)
-        x = torch.relu(self.projection(x))  # Áp dụng hàm kích hoạt ReLU
-        return torch.softmax(self.output_layer(x), dim=-1)  # Chuẩn hóa xác suất đầu ra
+        # Qua projection
+        x = self.projection(x)
+
+        # Đầu ra cuối cùng
+        output = self.output_layer(x)
+
+        # Chia thành 2 phần: 30 giá trị đầu (mu), 30 giá trị cuối (sigma)
+        mu = output[..., :30]  # Lấy 30 giá trị đầu tiên
+        sigma = output[..., 30:]  # Lấy 30 giá trị cuối cùng
+
+        # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
+        sigma = nn.functional.softplus(sigma)
+
+        return mu, sigma
 
     # Lưu trạng thái mô hình
     def save_model(self, path):
@@ -126,7 +138,7 @@ class Actor(nn.Module):
     # Tải trạng thái mô hình
     def load_model(self, path):
         with open(path, 'rb') as f:  # Đảm bảo file được đóng sau khi load
-            model_state = torch.load(f)
+            model_state = torch.load(f, weights_only=True)
         self.load_state_dict(model_state)
         self.eval()  # tắt dropout và batch normalization
 
@@ -172,8 +184,10 @@ class Critic(nn.Module):
 
     # Tải trạng thái mô hình
     def load_model(self, path):
-        self.load_state_dict(torch.load(path))
-        self.eval()  # tắt dropout và batch normalization, vì chúng chỉ cần thiết trong quá trình huấn luyện.
+        with open(path, 'rb') as f:  # Đảm bảo file được đóng sau khi load
+            model_state = torch.load(f, weights_only=True)
+        self.load_state_dict(model_state)
+        self.eval()  # tắt dropout và batch normalization
 
 
 class PPOClip_Training:
@@ -185,6 +199,7 @@ class PPOClip_Training:
                  actions,
                  log_probs,
                  sigma,
+                 rewards,
                  returns,
                  advantages,
                  epsilon=0.2,
@@ -201,6 +216,7 @@ class PPOClip_Training:
         self.actions = actions
         self.log_probs = log_probs
         self.sigma = sigma
+        self.rewards = rewards
         self.returns = returns
         self.advantages = advantages
         self.epsilon = epsilon
@@ -230,21 +246,26 @@ class PPOClip_Training:
         None
 
     """
+    # Biến lớp, dùng chung cho tất cả các đối tượng
+    best_reward = -float('inf')  # Đây là biến lớp
 
     def train(self):
+        # Tạo các danh sách lưu trữ giá trị
+        epochs_history = []
+        rewards_history = []
+        entropy_history = []
+        actor_loss_history = []
+        critic_loss_history = []
+        # Chuẩn hóa advantages
+        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+
         for epoch in range(self.epochs):
             # ** ------------- Huấn luyện Actor -----------------**
             # Forward qua model để tính các giá trị mới
-            predict_actor = self.actor(self.states)  # Tương thích với cấu trúc batch
-            _range = int(self.actor.output_size / 2)
-            mu = predict_actor[:, :, :_range]
-            sigma = predict_actor[:, :, _range:]
+            mu, sigma = self.actor(self.states)  # Tương thích với cấu trúc batch
 
             # Tính log-probabilities mới
             new_log_probs = compute_log_pi(self.actions, mu, sigma).unsqueeze(-1)  # Thêm chiều để khớp shape
-
-            # Chuẩn hóa advantages
-            self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
             # Tính loss
             actor_loss = ppo_loss_actor(advantage=self.advantages,
@@ -255,7 +276,16 @@ class PPOClip_Training:
                                         epsilon=self.epsilon)
             # Backward Actor
             self.actor_optimizer.zero_grad()
-            actor_loss.backward()  # Tính gradient cho Actor
+            # actor_loss.backward()  # Tính gradient cho Actor
+            actor_loss.backward()  # Tính backward để giữ đồ thị
+            # In giá trị gradient của các tham số trong Actor
+            print("\n=== Gradient của Actor ===")
+            for name, param in self.actor.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+                    print(f"{name} - Gradient norm: {grad_norm}")
+                else:
+                    print(f"{name} không có gradient!")
             self.actor_optimizer.step()  # Cập nhật tham số của Actor
 
             # ** ------------- Huấn luyện Critic -----------------*
@@ -265,36 +295,109 @@ class PPOClip_Training:
             # Tính loss
             critic_loss = ppo_loss_critic(predict_critic, self.returns)
             self.critic_optimizer.zero_grad()
-            critic_loss.backward()  # Tính gradient cho Critic
+            # self.critic_loss.backward()  # Tính gradient cho Critic
+            critic_loss.backward()  # Tính backward để giữ đồ thị
+            # In giá trị gradient của các tham số trong Critic
+            print("\n=== Gradient của Critic ===")
+            for name, param in self.critic.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+                    print(f"{name} - Gradient norm: {grad_norm}")
+                else:
+                    print(f"{name} không có gradient!")
+
             self.critic_optimizer.step()  # Cập nhật tham số của Critic
 
             print(
                 f"Epoch {epoch + 1}/{self.epochs}: Actor Loss: {actor_loss.item()}, Critic Loss: {critic_loss.item()}")
 
             # Lưu mô hình sau khi xong 1 iterator (4 epoch)
-            # Sau mỗi epoch, lưu mô hình Actor và Critic
-            num_epoch = self.epochs * self.training_id + epoch + 1
-            self.actor.save_model(f"{self.path_dir}actor_epoch_{num_epoch}.pth")
-            self.critic.save_model(f"{self.path_dir}critic_epoch_{num_epoch}.pth")
+            # Tính entropy để theo dõi mức độ ngẫu nhiên của policy
+            epochs_history.append(self.epochs * self.training_id + epoch + 1)
+            entropy = -torch.sum(sigma.log(), dim=-1).mean()  # Entropy tính từ sigma
+            entropy_history.append(entropy.item())  # Lưu lại Entropy
+            actor_loss_history.append(actor_loss.item())  # Lưu lại Actor loss
+            critic_loss_history.append(critic_loss.item())  # Lưu lại Critic loss
+            # Tính reward trung bình
+            mean_reward = self.returns.mean().item()
+            rewards_history.append(mean_reward)  # Lưu lại reward
 
+            # =========== LƯU THÔNG TIN MÔ HÌNH SAU KHI HUẤN LUYỆN ===================
+
+            # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
+            if mean_reward > PPOClip_Training.best_reward:
+                PPOClip_Training.best_reward = mean_reward
+                best_actor_model = self.actor.state_dict()  # Lưu tham số của actor model
+                best_critic_model = self.critic.state_dict()  # Lưu tham số của critic model
+
+                # Lưu mô hình tốt nhất
+                torch.save({
+                    'actor_model': best_actor_model,
+                    'critic_model': best_critic_model,
+                    'reward': PPOClip_Training.best_reward,
+                }, f"{self.path_dir}best_model.pth")
+
+            # # Sau mỗi epoch, lưu mô hình Actor và Critic
+            self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
+            self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
+
+            # # Sau mỗi epoch, lưu mô hình Actor và Critic cuối cùng
+            # num_epoch = self.epochs * self.training_id + epoch + 1
+            # self.actor.save_model(f"{self.path_dir}actor_epoch_{num_epoch}.pth")
+            # self.critic.save_model(f"{self.path_dir}critic_epoch_{num_epoch}.pth")
+
+        # Kiểm tra file log đã tồn tại hay chưa
+        log_file = f"{self.path_dir}training_metrics_all.pth"
+        if os.path.exists(log_file):
+            # Nếu đã có log, load dữ liệu cũ
+            training_log = torch.load(log_file, weights_only=True)
+        else:
+            # Nếu chưa có log, tạo file mới
+            training_log = []
+
+        # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
+        training_log.append({
+            "epochs_history": epochs_history[-1],
+            "rewards_history": rewards_history[-1],
+            "entropy_history": entropy_history[-1],
+            "actor_loss_history": actor_loss_history[-1],
+            "critic_loss_history": critic_loss_history[-1]
+        })
+
+        # Lưu lại toàn bộ log
+        torch.save(training_log, log_file)
 
 # ==================== TÌM THAM SỐ MÔ HÌNH VÀ LOAD LÊN MODLE =================
 
+
 def find_latest_model(prefix, directory="."):
-    """
-    Tìm file model mới nhất trong thư mục với prefix.
-
-    Args:
-        prefix (str): Tiền tố của file (vd: 'actor_epoch_').
-        directory (str): Thư mục chứa các file model.
-
-    Returns:
-        str: Đường dẫn đến file model mới nhất.
-    """
     files = [f for f in os.listdir(directory) if f.startswith(prefix) and f.endswith(".pth")]
+
     if not files:
-        return None  # Không tìm thấy file
-    # Sắp xếp file theo số epoch
-    files = sorted(files, key=lambda x: int(re.search(r'\d+', x).group()), reverse=True)
-    return os.path.join(directory, files[0])  # File mới nhất
+        return None
+
+    # Sắp xếp file theo thời gian sửa đổi gần nhất
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(directory, f)), reverse=True)
+
+    # Trả về file mới nhất
+    return os.path.join(directory, files[0])
+
+
+# def find_latest_model(prefix, directory="."):
+#     """
+#     Tìm file model mới nhất trong thư mục với prefix.
+#
+#     Args:
+#         prefix (str): Tiền tố của file (vd: 'actor_epoch_').
+#         directory (str): Thư mục chứa các file model.
+#
+#     Returns:
+#         str: Đường dẫn đến file model mới nhất.
+#     """
+#     files = [f for f in os.listdir(directory) if f.startswith(prefix) and f.endswith(".pth")]
+#     if not files:
+#         return None  # Không tìm thấy file
+#     # Sắp xếp file theo số epoch
+#     files = sorted(files, key=lambda x: int(re.search(r'\d+', x).group()), reverse=True)
+#     return os.path.join(directory, files[0])  # File mới nhất
 

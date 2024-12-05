@@ -20,6 +20,7 @@ class Buffer:
             "sigma": deque(maxlen=trajectory_size),
             "values": deque(maxlen=trajectory_size),
             "trajectory_ids": deque(maxlen=trajectory_size),
+
         }
 
     def add_sample(self, state, action, reward, log_prob, sigma, value, trajectory_id):
@@ -302,6 +303,7 @@ class ReplayBuffer(Buffer):
             "actions": np.array([buffer_large["actions"][i] for i in selected_indices]),  # 2D
             "log_probs": np.array([buffer_large["log_probs"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
             "sigma": np.array([buffer_large["sigma"][i] for i in selected_indices]),  # 2D
+            "rewards": np.array([buffer_large["rewards"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
             "returns": np.array([buffer_large["returns"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
             "advantages": np.array([buffer_large["advantages"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
             "trajectory_ids": np.array([buffer_large["trajectory_ids"][i] for i in selected_indices]),
@@ -349,6 +351,8 @@ class ReplayBuffer(Buffer):
     def reset(self):
         """Reset buffer nhỏ trong RAM."""
         for key in self.buffer:
+            if key == "best_reward":
+                continue
             self.buffer[key] = deque(maxlen=self.trajectory_size)
 
 
