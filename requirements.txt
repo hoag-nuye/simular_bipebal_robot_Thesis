@@ -6,3 +6,4 @@ torch==2.5.1
 torchvision==0.15.1
 torchaudio==2.5.1
 matplotlib==3.9.3
+keyboard==0.13.5

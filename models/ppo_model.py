@@ -133,6 +133,17 @@ class Actor(nn.Module):
 
         # Lưu mô hình vào file
         torch.save(self.state_dict(), path)
+        # tạo thêm file cho việc hiển thị để tránh tranh chấp tài nguyên
+        if 'actor' in str(path):
+            # Tìm vị trí cần chèn
+            insert_position = path.find("actor")
+            # Tạo chuỗi mới bằng cách chèn "viewer_" vào
+            if insert_position != -1:
+                modified_path = path[:insert_position] + "viewer_" + path[insert_position:]
+                torch.save(self.state_dict(), modified_path)
+            else:
+                modified_path = path  # Giữ nguyên nếu "actor_epoch" không tồn tại
+                torch.save(self.state_dict(), modified_path)
         # print(f"Model saved successfully at {path}")
 
     # Tải trạng thái mô hình
@@ -278,14 +289,14 @@ class PPOClip_Training:
             self.actor_optimizer.zero_grad()
             # actor_loss.backward()  # Tính gradient cho Actor
             actor_loss.backward()  # Tính backward để giữ đồ thị
-            # In giá trị gradient của các tham số trong Actor
-            print("\n=== Gradient của Actor ===")
-            for name, param in self.actor.named_parameters():
-                if param.grad is not None:
-                    grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
-                    print(f"{name} - Gradient norm: {grad_norm}")
-                else:
-                    print(f"{name} không có gradient!")
+            # # In giá trị gradient của các tham số trong Actor
+            # print("\n=== Gradient của Actor ===")
+            # for name, param in self.actor.named_parameters():
+            #     if param.grad is not None:
+            #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+            #         print(f"{name} - Gradient norm: {grad_norm}")
+            #     else:
+            #         print(f"{name} không có gradient!")
             self.actor_optimizer.step()  # Cập nhật tham số của Actor
 
             # ** ------------- Huấn luyện Critic -----------------*
@@ -298,13 +309,13 @@ class PPOClip_Training:
             # self.critic_loss.backward()  # Tính gradient cho Critic
             critic_loss.backward()  # Tính backward để giữ đồ thị
             # In giá trị gradient của các tham số trong Critic
-            print("\n=== Gradient của Critic ===")
-            for name, param in self.critic.named_parameters():
-                if param.grad is not None:
-                    grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
-                    print(f"{name} - Gradient norm: {grad_norm}")
-                else:
-                    print(f"{name} không có gradient!")
+            # print("\n=== Gradient của Critic ===")
+            # for name, param in self.critic.named_parameters():
+            #     if param.grad is not None:
+            #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+            #         print(f"{name} - Gradient norm: {grad_norm}")
+            #     else:
+            #         print(f"{name} không có gradient!")
 
             self.critic_optimizer.step()  # Cập nhật tham số của Critic
 
