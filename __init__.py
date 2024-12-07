@@ -1,3 +1,10 @@
+# === Information ================================================================
+#  @author:       Hoàng Nguyên
+#  Email:         nguyen80o08nguyen@gmail.com
+#  Github:        hoag.nuye
+#  Created Date:  2024-12-07
+# === Information ================================================================
+
 import os
 import multiprocessing
 
