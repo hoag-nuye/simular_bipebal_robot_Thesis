@@ -9,29 +9,37 @@ import time
 import sys
 
 
-def progress_console(total_steps, current_steps, begin_time, ncols=80):
-    # Cập nhật phần trăm
-    percent = current_steps / total_steps
-    elapsed_time = time.time() - begin_time
-    remaining_time = 0 if percent == 0 else elapsed_time / percent
-    rate = 0 if remaining_time == 0 else int(current_steps / elapsed_time)
+def convert_second2time(times):
+    # Đảm bảo đầu vào là số nguyên
+    times = int(times)
+    # Tính toán chi tiết từng đơn vị thời gian
+    days = times // 86400
+    remaining_seconds = times % 86400
 
-    num_done = int(percent * ncols)
-    num_left = ncols - num_done
-    #  ====================== CONSOLE BEGIN ========================
-    reset = "\033[0m"  # Reset màu về mặc định
-    sys.stdout.write("\033[2J\033[H")  # xóa toàn bộ màn hình và đặt lai con trỏ
-    sys.stdout.write(f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n")
-    sys.stdout.write(f"Samples: {current_steps}/{total_steps}\n")
-    sys.stdout.write(f"Passed: {elapsed_time:.2f} seconds\n")
-    sys.stdout.write(f"Estimate: {remaining_time:.2f} seconds\n")
-    sys.stdout.write(f"Speed: {rate:} samples/second")
-    sys.stdout.flush()
-    print()  # In một dòng trống sau khi hoàn thành
-    # ======================== END CONSOLE ========================
+    hours = remaining_seconds // 3600
+    remaining_seconds %= 3600
+
+    minutes = remaining_seconds // 60
+    seconds = remaining_seconds % 60
+
+    # Tạo chuỗi kết hợp biểu tượng
+    # return f"{days:02d}d🗓 {hours:02d}h ⏱{minutes:02d}m ⏲{seconds:02d}s ⏳"
+
+    # Tạo chuỗi kết quả
+    result = []
+    if days > 0:
+        result.append(f"{days:02d}d")
+    if hours > 0:
+        result.append(f"{hours:02d}h")
+    if minutes > 0:
+        result.append(f"{minutes:02d}m")
+    if seconds > 0 or not result:  # Luôn hiển thị giây nếu không có giá trị nào khác
+        result.append(f"{seconds:02d}s ⏱ ")
+
+    return ":".join(result)
 
 
-def colorize_bar(percent: object) -> object:
+def colorize_bar(percent):
     """
     Chuyển màu dần từ đỏ sang xanh lá cây dựa trên % tiến độ.
     """
@@ -41,6 +49,44 @@ def colorize_bar(percent: object) -> object:
     color_code = f"\033[38;2;{red};{green};0m"  # Mã ANSI màu
     return color_code
 
+
+def progress_console(total_steps, current_steps, begin_time, ncols=80):
+    # Cập nhật phần trăm
+    percent = current_steps / total_steps
+    elapsed_time = time.time() - begin_time
+    remaining_time = 0 if percent == 0 else elapsed_time / percent
+    rate = 0 if elapsed_time == 0 else int(current_steps / elapsed_time)
+
+    num_done = int(percent * ncols)
+    num_left = ncols - num_done
+    #  ====================== CONSOLE BEGIN ========================
+    reset = "\033[0m"  # Reset màu về mặc định
+    sys.stdout.write("\033[2J\033[H")  # xóa toàn bộ màn hình và đặt lai con trỏ
+    sys.stdout.write(f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n")
+    sys.stdout.write(f"Samples: {current_steps}/{total_steps}\n")
+    sys.stdout.write(f"Passed: {elapsed_time}\n")
+    sys.stdout.write(f"Estimate: {convert_second2time(remaining_time)} \n")
+    sys.stdout.write(f"Speed: {rate:} samples/second")
+    sys.stdout.flush()
+    print()  # In một dòng trống sau khi hoàn thành
+    # ======================== END CONSOLE ========================
+
+# days = 10
+# hours = 2
+# minutes = 2
+# seconds = 2
+# # Tạo chuỗi kết quả
+# result = []
+# if days > 0:
+#     result.append(f"{days:02d}d")
+# if hours > 0:
+#     result.append(f"{hours:02d}h")
+# if minutes > 0:
+#     result.append(f"{minutes:02d}m")
+# if seconds > 0 or not result:  # Luôn hiển thị giây nếu không có giá trị nào khác
+#     result.append(f"{seconds:02d}s ⏱")
+#
+# print(":".join(result))
 
 # total = 1000
 # steps = 10
