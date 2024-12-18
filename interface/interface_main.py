@@ -7,7 +7,6 @@
 
 import torch
 import torch.distributions as dist
-import random
 import mujoco
 import numpy as np
 
@@ -94,7 +93,7 @@ def collect_and_store(agent: Agent, buffer: ReplayCache, critic: Critic,
                     ECspd_right=agent.ECspd_right,
                     x_des=agent.x_des_vel,
                     y_des=agent.y_des_vel,
-                    quat_des=agent.S_t.pelvis_orientation)
+                    quat_des=agent.quat_des)
     )
 
     # Tính log_prob
@@ -121,6 +120,10 @@ def collect_and_store(agent: Agent, buffer: ReplayCache, critic: Critic,
     -------------------------- THU THẬP TRẢI NGHIỆM ----------------------------
     ============================================================
     """
+
+
+def check_traj_id(real_id, check_id):
+    return True if real_id == check_id else False
 
 
 def trajectory_collection(traj_id_start,
@@ -188,7 +191,8 @@ def trajectory_collection(traj_id_start,
                     # MÔ PHỎNG
                     mujoco.mj_step(agt.agt_model, agt.agt_data)
                     continue
-
+                # if check_traj_id(traj_id, 0):
+                #     print("TẦN SỐ :", steps_per_policy_counter)
                 steps_per_policy_counter = 0  # Trả lại trạng thái đợi mô phỏng
                 is_control = True  # Trả lại trạng thái tính toán a_t
                 #  ------- Thu thập trạng thái S_t+1 và tính r_t+1-------------
@@ -207,6 +211,8 @@ def trajectory_collection(traj_id_start,
                 timestep_clock_counter += 1
                 samples_of_traj_counter += 1  # Đếm số lượng sample nhưng không reset khi hết 1 clock
             else:
+                # if check_traj_id(traj_id, 0):
+                #     print("TIME CLOCK: ", timestep_clock_counter)
                 timestep_clock_counter = 0  # Bắt đầu 1 timestep mới của clock
 
         else:
@@ -218,12 +224,11 @@ def trajectory_collection(traj_id_start,
 
             # Kết thúc quá trình thu thập 1 trải nghiệm
             elif not ((samples_of_traj_counter < num_samples_traj) and not agt.S_t.isTerminalState):
+                # if check_traj_id(traj_id, 0):
+                #     print("SAMPLE: ", samples_of_traj_counter)
                 samples_of_traj_counter = 0  # Bắt đầu 1 trajectory mới
                 traj_counter += 1  # Bắt đầu 1 trajectory mới
                 traj_id += 1  # Bắt đầu 1 trajectory mới
-                # Tín hiệu điều khiển mới
-                agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
-                agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
 
     return buffer_result
 
@@ -244,7 +249,9 @@ def trajectory_collection(traj_id_start,
 """
 
 
-def train(training_id, data_batch, epochs, learning_rate, output_size, path_dir, use_cuda):
+def train(training_id, max_training_id,data_batch, epochs,
+          actor_learning_rate, critic_learning_rate, entropy_weight,
+          output_size, path_dir, use_cuda):
     # Kiểm tra xem có CUDA hay không
     # https://pytorch.org/get-started/locally/
     device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
@@ -259,6 +266,7 @@ def train(training_id, data_batch, epochs, learning_rate, output_size, path_dir,
     actor = Actor(input_size=input_size, output_size=output_size).to(device)
     critic = Critic(input_size=input_size).to(device)
     ppo_clip_training = PPOClip_Training(training_id=training_id,
+                                         max_training_id=max_training_id,
                                          actor_model=actor,
                                          critic_model=critic,
                                          states=data_batch["states"],
@@ -269,9 +277,10 @@ def train(training_id, data_batch, epochs, learning_rate, output_size, path_dir,
                                          returns=data_batch["returns"],
                                          advantages=data_batch["advantages"],
                                          epsilon=0.2,
-                                         entropy_weight=0.01,
+                                         entropy_weight=entropy_weight,
                                          num_epochs=epochs,
-                                         learning_rate=learning_rate,
+                                         actor_learning_rate=actor_learning_rate,
+                                         critic_learning_rate=critic_learning_rate,
                                          path_dir=path_dir)
 
     ppo_clip_training.train()

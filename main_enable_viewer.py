@@ -57,12 +57,11 @@ def process_action(agent: Agent, actor: Actor, sample_id: int, tms_clk: int):
 
     # Tạo đầu vào cho Actor
     traj_input_model = agent.traj_input(agent.x_des_vel, agent.y_des_vel, tms_clk).float()
-    traj_output_model = actor(traj_input_model).detach()
 
     # Lấy `mu` và `sigma` từ Actor để tính toán hành động
-    _range = int(actor.output_size / 2)
-    mu = traj_output_model[:, :, :_range]
-    sigma = traj_output_model[:, :, _range:]
+    mu, sigma = actor(traj_input_model)
+    mu = mu.detach()
+    sigma = sigma.detach()
 
     # Tính toán tín hiệu điều khiển và hành động
     control, action = agent.control_signal_complex(mu, sigma,
@@ -200,7 +199,7 @@ def main(use_cuda=False):
     # ------------------ SETUP TIME CONTROL --------------------
     agt.agt_model.opt.timestep = 0.0005  # Set timestep to achieve 2000Hz
     # Định nghĩa tần số
-    policy_freq = 40  # Tần số chính sách (Hz) Trong 1s thu thập được 40 trạng thái
+    policy_freq = 100  # Tần số chính sách (Hz) Trong 1s thu thập được 40 trạng thái
     pd_control_freq = 2000  # Tần số bộ điều khiển PD (Hz)
     steps_per_policy = pd_control_freq // policy_freq  # Số bước PD trong mỗi bước chính sách
     steps_per_policy_counter = 0  # Đếm số bước mô phỏng

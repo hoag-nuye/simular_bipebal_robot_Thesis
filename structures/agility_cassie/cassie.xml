@@ -52,13 +52,13 @@
     <mesh name="right-foot" scale="1 1 -1" file="foot.obj"/>
   </asset>
 
-   
-    <tendon>
-      <spatial name="pelvis-foot-tendon" range="0 .33" limited="true" width=".01" rgba=".95 .3 .3 1">
-        <site site="pelvis-anchor"/>
-        <site site="under-pelvis-anchor"/>
-      </spatial>
-    </tendon>
+<!--&lt;!&ndash;====================DÂY TREO =========================&ndash;&gt;-->
+<!--    <tendon>-->
+<!--      <spatial name="pelvis-foot-tendon" range="0 .33" limited="true" width=".01" rgba=".95 .3 .3 1">-->
+<!--        <site site="pelvis-anchor"/>-->
+<!--        <site site="under-pelvis-anchor"/>-->
+<!--      </spatial>-->
+<!--    </tendon>-->
 
   
 
@@ -138,7 +138,7 @@
                     <geom type="mesh" mesh="left-foot" euler="0 0 90"/>
                     <geom size="0.02" fromto="-0.052821 0.092622 0 0.069746 -0.010224 0" class="collision-left"/>
                     <!--Gót chân và đệm chân-->
-                    <site name="left-heel-foot-force" pos="0.08 0.005 0.0" size="0.005" rgba="1 0 0 1"/>
+                    <site name="left-heel-foot" pos="0.059 0.024 0.0" size="0.005" rgba="1 0 0 1"/>
                     <site name="left-ball-foot" pos="-0.02 0.09 0.0" size="0.005" rgba="0 1 0 1"/>
                   </body>
                 </body>
@@ -208,7 +208,7 @@
                     <geom type="mesh" mesh="right-foot" euler="0 0 -90"/>
                     <geom size="0.02" fromto="-0.052821 0.092622 0 0.069746 -0.010224 0" class="collision-right"/>
                     <!--Gót chân và đệm chân-->
-                    <site name="right-heel-foot-force" pos="0.08 0.005 0.0" size="0.005" rgba="1 0 0 1"/>
+                    <site name="right-heel-foot" pos="0.059 0.024 0.0" size="0.005" rgba="1 0 0 1"/>
                     <site name="right-ball-foot" pos="-0.02 0.09 0.0" size="0.005" rgba="0 1 0 1"/>
                   </body>
                 </body>
@@ -287,12 +287,12 @@
     <!-- Force sensors -->
     <!-- Do chân trái euler="0 0 90" , chân phải euler="0 0 -90" nên 2 lực Fz sẽ ngược nhau-->
     <!-- Nên lúc hiển thị 2 lực sẽ trái dấu-->
-    <force name="left-foot-force" site="left-ball-foot"/>
-    <force name="right-foot-force" site="right-ball-foot"/>
+    <force name="left-foot-force" site="left-heel-foot"/>
+    <force name="right-foot-force" site="right-heel-foot"/>
 
     <!-- Velocity sensors -->
-    <velocimeter name="left-foot-speed" site="left-ball-foot" noise="1e-3" cutoff="50"/>
-    <velocimeter name="right-foot-speed" site="right-ball-foot" noise="1e-3" cutoff="50"/>
+    <velocimeter name="left-foot-speed" site="left-heel-foot" noise="1e-3" cutoff="50"/>
+    <velocimeter name="right-foot-speed" site="right-heel-foot" noise="1e-3" cutoff="50"/>
 
     <!-- Pelvis sensors -->
     <framequat name="pelvis-orientation" objtype="site" objname="imu"/>

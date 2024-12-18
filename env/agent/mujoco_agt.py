@@ -5,6 +5,9 @@
 #  Created Date:  2024-12-07
 # === Information ================================================================
 
+import matplotlib.pyplot as plt
+import math
+
 import os
 import time
 import mujoco
@@ -61,6 +64,7 @@ class Agent:
         self.r = None
         self.x_des_vel = None  # Control vận tốc theo trục x
         self.y_des_vel = None  # Control vận tốc theo trục y
+        self.quat_des = None  # Control hướng
 
         # Save variable of reward (or different meaning is control signal)
         self.ECfrc_left = None
@@ -102,14 +106,65 @@ class Agent:
         self.atr_ctrl_map = self.get_actuators_map()
         self.atr_num = len(self.atr_map[next(iter(self.atr_map))])
         self.atr_ctrl_ranges = self.extract_ctrl_ranges()
-        self.a_t_sub1 = np.zeros(self.atr_num * 3)  # Được tính từ pTarget, pGain, dGain
+        self.a_t_sub1 = np.zeros(self.atr_num * 4)  # Được tính từ pTarget, pGain, dGain
         self.ctrl_min = torch.tensor([v[0] for v in self.atr_ctrl_ranges.values()])
         self.ctrl_max = torch.tensor([v[1] for v in self.atr_ctrl_ranges.values()])
         print('Setup is done !')
 
+    # ========================= THIẾT LẬP TRẠNG THÁI BẮT ĐẦU =========================
+
+    def get_foot_forces_z(self):
+        """
+        Lấy lực tiếp xúc trục z (thành phần thứ 3) của hai chân.
+        """
+        left_fz = self.S_t.left_foot_force[2]
+        right_fz = self.S_t.right_foot_force[2]
+        return left_fz, right_fz
+
+    def get_tilt_angle(self):
+        w = self.S_t.pelvis_orientation[0]
+        x = self.S_t.pelvis_orientation[1]
+        y = self.S_t.pelvis_orientation[2]
+        z = self.S_t.pelvis_orientation[3]
+        """
+            Chuyển đổi quaternion (x, y, z, w) sang góc Euler (roll, pitch, yaw).
+            Các góc trả về theo đơn vị radian.
+            """
+        # Roll (góc quanh trục x)
+        t0 = 2.0 * (w * x + y * z)
+        t1 = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(t0, t1)
+
+        # Pitch (góc nghiêng quanh trục y)
+        t2 = 2.0 * (w * y - z * x)
+        t2 = max(-1.0, min(1.0, t2))  # Giới hạn giá trị để tránh lỗi domain của arcsin
+        pitch = math.asin(t2)
+
+        # # Yaw (góc xoay quanh trục z)
+        # t3 = 2.0 * (w * z + x * y)
+        # t4 = 1.0 - 2.0 * (y * y + z * z)
+        # yaw = math.atan2(t3, t4)
+
+        return math.degrees(math.sqrt(roll**2 + pitch**2))
+
+
+    def set_state_begin(self):
+        # Đặt trạng thái ban đầu trong qpos (giá trị từ key XML)
+        self.agt_data.qpos[:] = [-0.00951869, -2.10186e-06, 0.731217, 0.997481, -6.09803e-05, -0.0709308,
+                                 -9.63422e-05, 0.00712554, 0.0138893, 0.741668, 0.826119, -0.00862023,
+                                 0.0645049, -0.559726, -1.98545, -0.00211571, 2.20938, -0.00286638,
+                                 -1.87213, 1.85365, -1.978, -0.00687543, -0.0135461, 0.741728, 0.826182,
+                                 -0.00196479, -0.057323, -0.560476, -1.98537, -0.00211578, 2.20931,
+                                 -0.00286634, -1.87219, 1.85371, -1.97806]
+        # Cập nhật trạng thái mô phỏng
+        mujoco.mj_forward(self.agt_model, self.agt_data)
+        self.agt_data.qvel[:] = 0  # Đặt vận tốc bằng 0
+        self.agt_data.ctrl[:] = 0  # Đặt lực điều khiển bằng 0
+
     # ========================= Show simulation =========================
     def step(self):
         mujoco.mj_step(self.agt_model, self.agt_data)
+
     def render(self, viewer):
 
         start_tm = time.time()
@@ -344,6 +399,7 @@ class Agent:
 
     # Tính toán torque
     def control_signal_complex(self, mu, sigma, q, qd, exploration_noise_std=1e-1):
+
         """
         Hàm tính toán torque điều khiển từ các giá trị mu và sigma dựa trên số actuator.
 
@@ -361,8 +417,8 @@ class Agent:
             vào sigma -> tăng khám phá
         """
         # Kiểm tra điều kiện đầu vào
-        assert mu.shape[-1] == self.atr_num * 3, "Số lượng mu không khớp với số actuator * 3."
-        assert sigma.shape[-1] == self.atr_num * 3, "Số lượng sigma không khớp với số actuator * 3."
+        assert mu.shape[-1] == self.atr_num * 4, "Số lượng mu không khớp với số actuator * 4."
+        assert sigma.shape[-1] == self.atr_num * 4, "Số lượng sigma không khớp với số actuator * 4."
         assert q.shape[0] == self.atr_num, "Số actuator trong q không khớp với current_actuator."
         assert qd.shape[0] == self.atr_num, "Số actuator trong qd không khớp với current_actuator."
 
@@ -370,24 +426,26 @@ class Agent:
         noise_mu = torch.normal(mean=torch.zeros_like(mu), std=exploration_noise_std)
         noise_sigma = torch.normal(mean=torch.zeros_like(sigma), std=exploration_noise_std)
 
-
         # Thêm noise vào mu và sigma
         mu = mu + noise_mu
-        sigma = torch.clamp(sigma + noise_sigma, min=1e-3)  # Đảm bảo sigma không âm
+        sigma = torch.clamp(sigma + noise_sigma, min=1e-3)  # Đảm bảo sigma > 0
 
         # Tách mu và sigma
-        pTarget_mu, dTarget_mu = mu[:, :, : self.atr_num], mu[:, :, :self.atr_num]
-        pGain_mu, dGain_mu = mu[:, :, self.atr_num:self.atr_num * 2], mu[:, :, self.atr_num * 2:]
+        pTarget_mu, dTarget_mu = mu[:, :, : self.atr_num], mu[:, :, self.atr_num:self.atr_num * 2]
+        pGain_mu, dGain_mu = mu[:, :, self.atr_num * 2:self.atr_num * 3], mu[:, :, self.atr_num * 3:self.atr_num * 4]
 
-        pTarget_sigma, dTarget_sigma = sigma[:, :, :self.atr_num], sigma[:, :, :self.atr_num]
-        pGain_sigma, dGain_sigma = sigma[:, :, self.atr_num:self.atr_num * 2], sigma[:, :, self.atr_num * 2:]
+        pTarget_sigma, dTarget_sigma = (sigma[:, :, :self.atr_num],
+                                        sigma[:, :, self.atr_num:self.atr_num * 2])
+
+        pGain_sigma, dGain_sigma = (sigma[:, :, self.atr_num * 2:self.atr_num * 3],
+                                    sigma[:, :, self.atr_num * 3:self.atr_num * 4])
 
         # Lấy mẫu từ phân phối
 
         dist_pTarget = torch.distributions.Normal(pTarget_mu, pTarget_sigma)
         sampled_pTarget = dist_pTarget.sample()
-        # dist_dTarget = torch.distributions.Normal(dTarget_mu, dTarget_sigma)
-        # sampled_dTarget = dist_dTarget.sample()
+        dist_dTarget = torch.distributions.Normal(dTarget_mu, dTarget_sigma)
+        sampled_dTarget = dist_dTarget.sample()
         dist_pGain = torch.distributions.Normal(pGain_mu, pGain_sigma)
         sampled_pGain = dist_pGain.sample()
         dist_dGain = torch.distributions.Normal(dGain_mu, dGain_sigma)
@@ -396,19 +454,19 @@ class Agent:
         # relu giá trị gain
         sampled_pGain = torch.relu(sampled_pGain)
         sampled_dGain = torch.relu(sampled_dGain)
-        # print(sampled_pGain.shape, sampled_dGain.shape, sampled_pTarget.shape, sampled_dTarget.shape)
         # Tính toán torque
         torque = []
         for i in range(self.atr_num):
             torque_i = sampled_pGain[0, 0, i] * (sampled_pTarget[0, 0, i] - q[i]) + \
-                       sampled_dGain[0, 0, i] * (0 - qd[i])  # dTarget mặc định là 0
+                       sampled_dGain[0, 0, i] * (sampled_dTarget[0, 0, i] - qd[i])
             torque.append(torque_i)
         # Clip torque về ctrl_ranges
         torque = torch.tensor(torque)
         torque = torch.clamp(torque, self.ctrl_min, self.ctrl_max)
 
         # Lưu lại action đã được lấy mẫu từ mu và sigma để điều khiển agent
-        action = torch.cat([sampled_pTarget.squeeze(), sampled_pGain.squeeze(), sampled_dGain.squeeze()], dim=0)
+        action = torch.cat([sampled_pTarget.squeeze(), sampled_pGain.squeeze(),
+                            sampled_dTarget.squeeze(), sampled_dGain.squeeze()], dim=0)
 
         return torque, action
 
@@ -462,6 +520,9 @@ class Agent:
 
     # Điều khiển agent
     def control_agent(self, control_signal):
+        print("===============BEGIN===============================")
+        print(f"Max torque: {control_signal.max()}, Min torque: {control_signal.min()}")
+        print("===============END===================================")
         for i, (torque, idx) in enumerate(zip(control_signal, self.atr_ctrl_map.values())):
             self.agt_data.ctrl[idx] = torque
 
@@ -501,3 +562,59 @@ class Agent:
         inputs = torch.cat([S_t, xy_des, r, p], dim=0)
         # Chuyển về mảng 3D mới vào LTSM được (batch_size, sequence_length, input_size)
         return inputs.unsqueeze(0).unsqueeze(0)
+
+    def plot_EC(self):
+        X_phi = np.arange(100)  # Tạo mảng từ 0 đến 99
+        # Tạo hình với kích thước 12x8
+        plt.figure(figsize=(12, 8))
+
+        ''' ===================== FORCE ============================'''
+
+        # Subplot 1: FORCE LEFT
+        # 4 hàng , vị trí cột, thứ tự hàng
+        plt.subplot(4, 1, 1)  # Vị trí: hàng 1, cột 1
+        plt.plot(X_phi, self.ECfrc_left, label='E[C_frc(ϕ+θ)] (LEFT)')
+        plt.xlabel("X (ϕ)")
+        plt.ylabel("Y_spd_left")
+        plt.title("FORCE - LEFT")
+        plt.xlim(X_phi[0], X_phi[-1])
+        plt.legend()
+        plt.grid()
+
+        # Subplot 2: FORCE RIGHT
+        plt.subplot(4, 1, 2)  # Vị trí: hàng 2, cột 1
+        plt.plot(X_phi, self.ECfrc_right, label='E[C_frc(ϕ+θ)] (RIGHT)')
+        plt.xlabel("X (ϕ)")
+        plt.ylabel("Y_spd_right")
+        plt.title("FORCE - RIGHT")
+        plt.xlim(X_phi[0], X_phi[-1])
+        plt.legend()
+        plt.grid()
+
+        ''' ===================== SPEED ============================'''
+
+        # Subplot 3: SPEED LEFT
+        plt.subplot(4, 1, 3)  # Vị trí: hàng 3, cột 1
+        plt.plot(X_phi, self.ECspd_left, label='E[C_spd(ϕ+θ)] (LEFT)')
+        plt.xlabel("X (ϕ)")
+        plt.ylabel("Y_spd_left")
+        plt.title("SPEED - LEFT")
+        plt.xlim(X_phi[0], X_phi[-1])
+        plt.legend()
+        plt.grid()
+
+        # Subplot 4: SPEED RIGHT
+        plt.subplot(4, 1, 4)  # Vị trí: hàng 4, cột 1
+        plt.plot(X_phi, self.ECspd_right, label='E[C_spd(ϕ+θ)] (RIGHT)')
+        plt.xlabel("X (ϕ)")
+        plt.ylabel("Y_spd_right")
+        plt.title("SPEED - RIGHT")
+        plt.xlim(X_phi[0], X_phi[-1])
+        plt.legend()
+        plt.grid()
+
+        # Tự động căn chỉnh khoảng cách giữa các subplot
+        plt.tight_layout()
+
+        # Hiển thị tất cả các đồ thị trên cùng một hình
+        plt.show()

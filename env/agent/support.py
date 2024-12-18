@@ -8,6 +8,7 @@
 import numpy as np
 import math
 
+
 def validate_add_state(array: np.ndarray, expected_shape: tuple, name: str):
     """
     Kiểm tra xem mảng đầu vào có đúng kích thước không.

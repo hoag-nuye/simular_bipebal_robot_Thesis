@@ -23,7 +23,6 @@ def compute_reward(param: RewardParam):
     x_des = param.x_des
     y_des = param.y_des
     quat_des = param.quat_des
-
     # =========== Hệ số Beta =============
     beta = 1  # Tránh việc phần thưởng quá nhỏ dẫn đến sự biến mất của đạo hàm
     # =========== Hệ số omega =============
@@ -32,7 +31,7 @@ def compute_reward(param: RewardParam):
     q_left_frc = 1 - math.exp(-omega * np.linalg.norm(S_t.left_foot_force) ** 2 / 100)
     q_right_frc = 1 - math.exp(-omega * np.linalg.norm(S_t.right_foot_force) ** 2 / 100)
     q_left_spd = 1 - math.exp(-2 * omega * np.linalg.norm(S_t.left_foot_speed) ** 2)
-    q_right_spd = 1 - math.exp(-2 * omega * np.linalg.norm(S_t.left_foot_speed) ** 2)
+    q_right_spd = 1 - math.exp(-2 * omega * np.linalg.norm(S_t.right_foot_speed) ** 2)
 
     r_bipedal = ECfrc_left * q_left_frc \
               + ECfrc_right * q_right_frc \
@@ -74,9 +73,9 @@ def compute_reward(param: RewardParam):
 
     # ============== TÍNH R Multi ==============
     R_multi = 0.400 * r_bipedal \
-            + 0.300 * r_cmd \
-            + 0.100 * r_smooth \
-            + 0.100 * r_std_cost \
+            + 0.3 * r_cmd \
+            + 0.2 * r_smooth \
+            + 0.2 * r_std_cost \
             + beta
 
     return R_multi

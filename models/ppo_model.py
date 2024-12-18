@@ -57,6 +57,7 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None,
     loss = -torch.mean(surrogate_loss) + entropy_weight * torch.mean(entropy)
     return loss
 
+
 def ppo_loss_critic(predicted_values, returns):
     """
     Loss của Critic trong PPO (mean squared error).
@@ -96,13 +97,14 @@ class Actor(nn.Module):
         self.output_size = output_size
         super(Actor, self).__init__()
         self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
-        self.norm1 = nn.LayerNorm(128)  # Chuẩn hóa layer để tăng ổn định
         self.dropout1 = nn.Dropout(dropout_rate)  # Dropout để tránh overfitting
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
-        self.norm2 = nn.LayerNorm(128)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.projection = nn.Linear(128, 128)  # Giảm chiều đầu ra nhưng vì đầu ra là 80 nên không cần giảm
-        self.output_layer = nn.Linear(128, output_size)  # Dự đoán giá trị đầu ra cuối cùng
+        # Fully Connected layers for enhanced learning
+        self.output_layer = nn.Sequential(
+            nn.Linear(128, output_size),  # Hidden layer 1
+            nn.Dropout(dropout_rate)
+        )
 
     def forward(self, x):
         # Kiểm tra và chuyển `x` về thiết bị của mô hình
@@ -111,20 +113,15 @@ class Actor(nn.Module):
             x = x.to(device)
 
         x, _ = self.lstm1(x)  # Đầu vào qua LSTM1
-        x = self.norm1(x)  # Chuẩn hóa
         x = self.dropout1(x)  # Dropout
         x, _ = self.lstm2(x)  # Đầu vào qua LSTM2
-        x = self.norm2(x)
         x = self.dropout2(x)
-        # Qua projection
-        x = self.projection(x)
-
         # Đầu ra cuối cùng
         output = self.output_layer(x)
 
-        # Chia thành 2 phần: 30 giá trị đầu (mu), 30 giá trị cuối (sigma)
-        mu = output[..., :30]  # Lấy 30 giá trị đầu tiên
-        sigma = output[..., 30:]  # Lấy 30 giá trị cuối cùng
+        # Chia thành 2 phần: 40 giá trị đầu (mu), 40 giá trị cuối (sigma)
+        mu = output[..., :40]  # Lấy 40 giá trị đầu tiên
+        sigma = output[..., 40:]  # Lấy 40 giá trị cuối cùng
 
         # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
         sigma = nn.functional.softplus(sigma)
@@ -161,32 +158,36 @@ class Actor(nn.Module):
         self.eval()  # tắt dropout và batch normalization
 
 
-# Mô hình Critic sử dụng LSTM
 class Critic(nn.Module):
-    def __init__(self, input_size, dropout_rate=0.2):
+    def __init__(self, input_size, dropout_rate=0.1):
         super(Critic, self).__init__()
         self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)
-        self.norm1 = nn.LayerNorm(128)
         self.dropout1 = nn.Dropout(dropout_rate)
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)
-        self.norm2 = nn.LayerNorm(128)
         self.dropout2 = nn.Dropout(dropout_rate)
-        self.projection = nn.Linear(128, 64)
+        # Fully Connected layers for enhanced learning
+        self.fc1 = nn.Sequential(
+            nn.Linear(128, 128),  # Hidden layer 1
+            nn.Dropout(dropout_rate)
+        )
+        self.fc2 = nn.Sequential(
+            nn.Linear(128, 64),  # Hidden layer 2
+            nn.Dropout(dropout_rate)
+        )
         self.output_layer = nn.Linear(64, 1)  # Critic chỉ có 1 giá trị đầu ra (hàm giá trị)
 
     def forward(self, x):
-        # Kiểm tra và chuyển `x` về thiết bị của mô hình
+        # Kiểm tra và chuyển x về thiết bị của mô hình
         device = next(self.parameters()).device  # Lấy thiết bị của mô hình
         if x.device != device:
             x = x.to(device)
 
         x, _ = self.lstm1(x)
-        x = self.norm1(x)
         x = self.dropout1(x)
         x, _ = self.lstm2(x)
-        x = self.norm2(x)
         x = self.dropout2(x)
-        x = torch.relu(self.projection(x))
+        x = self.fc1(x)
+        x = self.fc2(x)
         return self.output_layer(x)  # Giá trị dự đoán cuối cùng
 
     # Lưu trạng thái mô hình
@@ -211,6 +212,7 @@ class Critic(nn.Module):
 class PPOClip_Training:
     def __init__(self,
                  training_id,
+                 max_training_id,
                  actor_model,
                  critic_model,
                  states,
@@ -223,7 +225,8 @@ class PPOClip_Training:
                  epsilon=0.2,
                  entropy_weight=0.01,
                  num_epochs=4,
-                 learning_rate=0.0001,
+                 actor_learning_rate=0.0001,
+                 critic_learning_rate=0.00005,
                  path_dir="models/param/"
                  ):
         self.training_id = training_id
@@ -241,9 +244,10 @@ class PPOClip_Training:
         self.entropy_weight = entropy_weight
         self.epochs = num_epochs
 
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=learning_rate)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=learning_rate)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
 
+        self.max_epoch = max_training_id*self.epochs
     """
     Hàm huấn luyện chính cho PPO với clipping.
 
@@ -264,6 +268,47 @@ class PPOClip_Training:
         None
 
     """
+    # Biến lớp: dùng chung cho tất cả các đối tượng
+    max_epoch = 0  # số epoch tối đa
+    crt_epoch = 0  # số epoch hiện tại
+    train_data = []  # Danh sách lưu trữ 10 epoch gần nhất
+
+    @classmethod
+    def update_epoch_data(cls, rewards_history, actor_loss_history, critic_loss_history):
+        """
+        Cập nhật dữ liệu cho epoch mới nhất và chỉ giữ lại 10 giá trị gần nhất.
+        """
+        # Thêm dữ liệu mới vào danh sách
+        cls.train_data.append({
+            "rewards_history": rewards_history,  # Giá trị reward cuối cùng
+            "actor_loss_history": actor_loss_history,  # Giá trị actor loss cuối cùng
+            "critic_loss_history": critic_loss_history  # Giá trị critic loss cuối cùng
+        })
+
+        # Giữ lại 5 giá trị mới nhất
+        if len(cls.train_data) > 5:
+            cls.train_data.pop(0)  # Xóa giá trị cũ nhất
+
+    @classmethod
+    def check_convergence(cls, epsilon=0.1):
+        """
+        Kiểm tra xem 1 trong 3 giá trị có không đổi qua 10 epoch hay không.
+        Trả về True nếu không đổi, ngược lại trả về False.
+        """
+        if len(cls.train_data) < 5 or cls.crt_epoch > 0.8*cls.max_epoch:
+            return False, None  # Chưa đủ 10 epoch để kiểm tra
+
+        # Kiểm tra từng thông tin xem có không đổi hay thay đổi ít hơn ngưỡng không
+        for key in ["rewards", "actor_loss", "critic_loss"]:
+            values = [epoch[key] for epoch in cls.train_data]
+
+            # Kiểm tra nếu ít nhất 1 giá trị thay đổi ít hơn ngưỡng epsilon
+            if all(abs(v - values[0]) < epsilon for v in values):
+                print(f"Convergence detected in {key}!")
+                return True, key
+
+        return False, None
+
     # Biến lớp, dùng chung cho tất cả các đối tượng
     best_reward = -float('inf')  # Đây là biến lớp
 
@@ -274,6 +319,24 @@ class PPOClip_Training:
         entropy_history = []
         actor_loss_history = []
         critic_loss_history = []
+
+        # ====== THAY ĐỔI LEARNING RATE VÀ ENTROPY WEIGHT ==========
+        # Kiểm tra xem mô hình có đang bị vướng vào điểm cực trị cục bộ
+        # hoặc là không khám phá thêm được gì mới (entropy ít biến động)
+        isCnv, key = self.check_convergence(epsilon=0.1)
+        if isCnv:
+            if key == "rewards":
+                self.entropy_weight = self.entropy_weight  # tăng khám phá
+            elif key == "actor_loss":
+                self.actor_optimizer.param_groups[0]['lr'] *= 1.5
+            elif key == "critic_loss":
+                self.critic_optimizer.param_groups[0]['lr'] *= 1.5
+            else:
+                print("Lỗi khi xét hội tụ")
+        else:
+            self.entropy_weight = max(self.entropy_weight * (0.99 ** PPOClip_Training.crt_epoch),
+                                      self.entropy_weight)  # Annealing entropy
+
         # Chuẩn hóa advantages
         self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
@@ -286,6 +349,8 @@ class PPOClip_Training:
             new_log_probs = compute_log_pi(self.actions, mu, sigma).unsqueeze(-1)  # Thêm chiều để khớp shape
 
             # Tính loss
+            PPOClip_Training.crt_epoch = self.epochs * self.training_id + epoch + 1  # tính chỉ số epoch hiện tại
+            crt_epoch = PPOClip_Training.crt_epoch
             actor_loss = ppo_loss_actor(advantage=self.advantages,
                                         new_log_probs=new_log_probs,
                                         old_log_probs=self.log_probs,
@@ -326,12 +391,9 @@ class PPOClip_Training:
 
             self.critic_optimizer.step()  # Cập nhật tham số của Critic
 
-            print(
-                f"Epoch {epoch + 1}/{self.epochs}: Actor Loss: {actor_loss.item()}, Critic Loss: {critic_loss.item()}")
-
             # Lưu mô hình sau khi xong 1 iterator (4 epoch)
             # Tính entropy để theo dõi mức độ ngẫu nhiên của policy
-            epochs_history.append(self.epochs * self.training_id + epoch + 1)
+            epochs_history.append(crt_epoch)
             entropy = -torch.sum(sigma.log(), dim=-1).mean()  # Entropy tính từ sigma
             entropy_history.append(entropy.item())  # Lưu lại Entropy
             actor_loss_history.append(actor_loss.item())  # Lưu lại Actor loss
@@ -340,6 +402,10 @@ class PPOClip_Training:
             mean_reward = self.returns.mean().item()
             rewards_history.append(mean_reward)  # Lưu lại reward
 
+            print(
+                f"Epoch {epoch + 1}/{self.epochs}: Actor Loss: {actor_loss.item()}, "
+                f"Critic Loss: {critic_loss.item()},"
+                f"Reward Mean: {mean_reward}")
             # =========== LƯU THÔNG TIN MÔ HÌNH SAU KHI HUẤN LUYỆN ===================
 
             # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
@@ -382,8 +448,14 @@ class PPOClip_Training:
             "critic_loss_history": critic_loss_history[-1]
         })
 
+        # Lưu lại 10 giá trị mới nhất để kiểm tra xem có bị kẹt khi huấn luyện hay không
+        self.update_epoch_data(rewards_history=rewards_history[-1],
+                               actor_loss_history=actor_loss_history[-1],
+                               critic_loss_history=critic_loss_history[-1])
+
         # Lưu lại toàn bộ log
         torch.save(training_log, log_file)
+
 
 # ==================== TÌM THAM SỐ MÔ HÌNH VÀ LOAD LÊN MODLE =================
 
@@ -399,7 +471,6 @@ def find_latest_model(prefix, directory="."):
 
     # Trả về file mới nhất
     return os.path.join(directory, files[0])
-
 
 # def find_latest_model(prefix, directory="."):
 #     """
@@ -418,4 +489,3 @@ def find_latest_model(prefix, directory="."):
 #     # Sắp xếp file theo số epoch
 #     files = sorted(files, key=lambda x: int(re.search(r'\d+', x).group()), reverse=True)
 #     return os.path.join(directory, files[0])  # File mới nhất
-

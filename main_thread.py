@@ -8,8 +8,8 @@
 import copy
 import random
 import time
+import numpy as np
 from signal import signal, SIGINT
-import sys
 import keyboard
 from functools import partial
 from multiprocessing import Pool, Process
@@ -143,9 +143,12 @@ if __name__ == "__main__":
 
     # Tạo tham số cho mô hình Actor và Critic
     traj_input_size = 42
-    traj_output_size = 60
+    traj_output_size = 80
     # Tạo replay_cache
     buffer_path_dir = 'env/agent/'
+
+    # Tạo tham số huấn luyện
+    max_training_id = int(num_samples / (num_samples_traj * num_traj_train))  # số lần train tối đa
 
     '''
     ======================================================
@@ -168,6 +171,7 @@ if __name__ == "__main__":
             agt.set_clock(r=r, N=num_clock, theta_left=theta_left, theta_right=theta_right)
             agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
             agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
+            agt.quat_des = np.array([0, 0, 0, 0])
 
             # ----------------- THU THẬP TRẢI NGHIỆM -----------------
 
@@ -227,9 +231,12 @@ if __name__ == "__main__":
             """
 
             train(training_id=train_counter,
+                  max_training_id=max_training_id,
                   data_batch=data_batch,
                   epochs=4,
-                  learning_rate=0.0001,
+                  actor_learning_rate=0.0001,
+                  critic_learning_rate=0.0001,
+                  entropy_weight=0.06,
                   output_size=traj_output_size,
                   path_dir="models/param/",
                   use_cuda=use_cuda)
