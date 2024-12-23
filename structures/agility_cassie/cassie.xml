@@ -3,7 +3,7 @@
 <include file="environment.xml" name="cassie_env"/>
 <compiler eulerseq="zyx" meshdir="assets" texturedir="assets" autolimits="true"/>
 
-  <option timestep="0.0005"/>
+  <option gravity="0 0 -9.81" timestep="0.002"/>
 
   <default>
     <geom contype="0" conaffinity="0" condim="1" solref="0.005 1"/>
@@ -60,11 +60,9 @@
 <!--      </spatial>-->
 <!--    </tendon>-->
 
-  
 
   <worldbody>
     <light name="spotlight" mode="targetbodycom" target="cassie-pelvis" pos="0 -1 2"/>
-
     <site name="under-pelvis-anchor" pos="0 0 1.3"/>
     <body name="cassie-pelvis" pos="0 0 1.1" childclass="cassie">
       <site name="pelvis-anchor" pos="0 0 0.15"/>
@@ -138,7 +136,8 @@
                     <geom type="mesh" mesh="left-foot" euler="0 0 90"/>
                     <geom size="0.02" fromto="-0.052821 0.092622 0 0.069746 -0.010224 0" class="collision-left"/>
                     <!--Gót chân và đệm chân-->
-                    <site name="left-heel-foot" pos="0.059 0.024 0.0" size="0.005" rgba="1 0 0 1"/>
+                    <site name="left-ankle" pos="0.00474 0.02748 -0.00014" size="0.01" rgba="0 0 0 1"/>
+                    <site name="left-heel-foot" pos="0.059 0.024 0.0" size="0.03 0.005 0.01" type="box" euler="-45 0 0" rgba="1 0 0 1"/>
                     <site name="left-ball-foot" pos="-0.02 0.09 0.0" size="0.005" rgba="0 1 0 1"/>
                   </body>
                 </body>
@@ -208,7 +207,8 @@
                     <geom type="mesh" mesh="right-foot" euler="0 0 -90"/>
                     <geom size="0.02" fromto="-0.052821 0.092622 0 0.069746 -0.010224 0" class="collision-right"/>
                     <!--Gót chân và đệm chân-->
-                    <site name="right-heel-foot" pos="0.059 0.024 0.0" size="0.005" rgba="1 0 0 1"/>
+                    <site name="right-ankle" pos="0.00474 0.02748 0.00014" size="0.01" rgba="0 0 0 1"/>
+                    <site name="right-heel-foot" pos="0.059 0.024 0.0" size="0.03 0.005 0.01" type="box" euler="-45 0 0" rgba="1 0 0 1"/>
                     <site name="right-ball-foot" pos="-0.02 0.09 0.0" size="0.005" rgba="0 1 0 1"/>
                   </body>
                 </body>
@@ -242,57 +242,59 @@
   </actuator>
 
   <sensor>
-    <!-- Actuator positions -->
-    <actuatorpos name="left-hip-roll-input" actuator="left-hip-roll"/>
-    <actuatorpos name="left-hip-yaw-input" actuator="left-hip-yaw"/>
-    <actuatorpos name="left-hip-pitch-input" actuator="left-hip-pitch"/>
-    <actuatorpos name="left-knee-input" actuator="left-knee"/>
-    <actuatorpos name="left-foot-input" actuator="left-foot"/>
 
-    <actuatorpos name="right-hip-roll-input" actuator="right-hip-roll" user="13"/>
-    <actuatorpos name="right-hip-yaw-input" actuator="right-hip-yaw" user="13"/>
-    <actuatorpos name="right-hip-pitch-input" actuator="right-hip-pitch" user="13"/>
-    <actuatorpos name="right-knee-input" actuator="right-knee" user="13"/>
-    <actuatorpos name="right-foot-input" actuator="right-foot" user="18"/>
+    <!-- Joint positions of actuator -->
+    <jointpos name="left-hip-roll-output" joint="left-hip-roll" noise="2e-4"/>
+    <jointpos name="left-hip-yaw-output" joint="left-hip-yaw" noise="2e-4"/>
+    <jointpos name="left-hip-pitch-output" joint="left-hip-pitch" noise="2e-4"/>
+    <jointpos name="left-knee-output" joint="left-knee" noise="2e-4"/>
+    <jointpos name="left-foot-output" joint="left-foot" noise="2e-4"/>
 
-    <!-- Actuator velocities -->
-    <actuatorvel name="left-hip-roll-velocity" actuator="left-hip-roll"/>
-    <actuatorvel name="left-hip-yaw-velocity" actuator="left-hip-yaw"/>
-    <actuatorvel name="left-hip-pitch-velocity" actuator="left-hip-pitch"/>
-    <actuatorvel name="left-knee-velocity" actuator="left-knee"/>
-    <actuatorvel name="left-foot-act-velocity" actuator="left-foot"/>
+    <jointpos name="right-hip-roll-output" joint="right-hip-roll" noise="2e-4"/>
+    <jointpos name="right-hip-yaw-output" joint="right-hip-yaw" noise="2e-4"/>
+    <jointpos name="right-hip-pitch-output" joint="right-hip-pitch" noise="2e-4"/>
+    <jointpos name="right-knee-output" joint="right-knee" noise="2e-4"/>
+    <jointpos name="right-foot-output" joint="right-foot" noise="2e-4"/>
 
-    <actuatorvel name="right-hip-roll-velocity" actuator="right-hip-roll"/>
-    <actuatorvel name="right-hip-yaw-velocity" actuator="right-hip-yaw"/>
-    <actuatorvel name="right-hip-pitch-velocity" actuator="right-hip-pitch"/>
-    <actuatorvel name="right-knee-velocity" actuator="right-knee"/>
-    <actuatorvel name="right-foot-act-velocity" actuator="right-foot"/>
+
+    <!-- Joint velocities of actuator -->
+    <jointvel name="left-hip-roll-velocity" joint="left-hip-roll" noise="2e-4"/>
+    <jointvel name="left-hip-yaw-velocity" joint="left-hip-yaw" noise="2e-4"/>
+    <jointvel name="left-hip-pitch-velocity" joint="left-hip-pitch" noise="2e-4"/>
+    <jointvel name="left-knee-velocity" joint="left-knee" noise="2e-4"/>
+    <jointvel name="left-foot-velocity" joint="left-foot" noise="2e-4"/>
+
+    <jointvel name="right-hip-roll-velocity" joint="right-hip-roll" noise="2e-4"/>
+    <jointvel name="right-hip-yaw-velocity" joint="right-hip-yaw" noise="2e-4"/>
+    <jointvel name="right-hip-pitch-velocity" joint="right-hip-pitch" noise="2e-4"/>
+    <jointvel name="right-knee-velocity" joint="right-knee" noise="2e-4"/>
+    <jointvel name="right-foot-velocity" joint="right-foot" noise="2e-4"/>
+
 
     <!-- Joint positions -->
-    <jointpos name="left-shin-output" joint="left-shin"/>
-    <jointpos name="left-tarsus-output" joint="left-tarsus"/>
-    <jointpos name="left-foot-output" joint="left-foot"/>
-    <jointpos name="right-shin-output" joint="right-shin"/>
-    <jointpos name="right-tarsus-output" joint="right-tarsus"/>
-    <jointpos name="right-foot-output" joint="right-foot"/>
+    <jointpos name="left-shin-output" joint="left-shin" noise="2e-4"/>
+    <jointpos name="left-tarsus-output" joint="left-tarsus" noise="2e-4"/>
+    <jointpos name="right-shin-output" joint="right-shin" noise="2e-4"/>
+    <jointpos name="right-tarsus-output" joint="right-tarsus" noise="2e-4"/>
+
 
     <!-- Joint velocities -->
-    <jointvel name="left-shin-velocity" joint="left-shin"/>
-    <jointvel name="left-tarsus-velocity" joint="left-tarsus"/>
-    <jointvel name="left-foot-velocity" joint="left-foot"/>
-    <jointvel name="right-shin-velocity" joint="right-shin"/>
-    <jointvel name="right-tarsus-velocity" joint="right-tarsus"/>
-    <jointvel name="right-foot-velocity" joint="right-foot"/>
+    <jointvel name="left-shin-velocity" joint="left-shin" noise="2e-4"/>
+    <jointvel name="left-tarsus-velocity" joint="left-tarsus" noise="2e-4"/>
+    <jointvel name="right-shin-velocity" joint="right-shin" noise="2e-4"/>
+    <jointvel name="right-tarsus-velocity" joint="right-tarsus" noise="2e-4"/>
 
     <!-- Force sensors -->
     <!-- Do chân trái euler="0 0 90" , chân phải euler="0 0 -90" nên 2 lực Fz sẽ ngược nhau-->
     <!-- Nên lúc hiển thị 2 lực sẽ trái dấu-->
-    <force name="left-foot-force" site="left-heel-foot"/>
-    <force name="right-foot-force" site="right-heel-foot"/>
+    <touch name="left-foot-touch" site="left-heel-foot" noise="1e-3" cutoff="50"/>
+    <touch name="right-foot-touch" site="right-heel-foot" noise="1e-3" cutoff="50"/>
+    <force name="left-foot-force" site="left-ankle" noise="1e-3" cutoff="50"/>
+    <force name="right-foot-force" site="right-ankle" noise="1e-3" cutoff="50"/>
 
     <!-- Velocity sensors -->
-    <velocimeter name="left-foot-speed" site="left-heel-foot" noise="1e-3" cutoff="50"/>
-    <velocimeter name="right-foot-speed" site="right-heel-foot" noise="1e-3" cutoff="50"/>
+    <velocimeter name="left-foot-speed" site="left-ankle" noise="1e-3" cutoff="50"/>
+    <velocimeter name="right-foot-speed" site="right-ankle" noise="1e-3" cutoff="50"/>
 
     <!-- Pelvis sensors -->
     <framequat name="pelvis-orientation" objtype="site" objname="imu"/>

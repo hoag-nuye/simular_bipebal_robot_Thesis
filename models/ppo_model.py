@@ -6,104 +6,92 @@
 # === Information ================================================================
 
 import os
-import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributions as dist
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
+
+
+def create_mask(batch_size, timestamps, lengths_traj, device):
+    mask = torch.zeros((batch_size, timestamps), device=device)
+    for i, length in enumerate(lengths_traj):
+        mask[i, :length] = 1
+    return mask
 
 
 # Hàm tính toán tổn thất PPO với clipping
-def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None,
-                   sigma=None, entropy_weight=0.01, epsilon=0.2):
-    """
-    Hàm kết hợp tính loss cho actor với clipping và entropy.
-
-    Args:
-        advantage (Tensor): Advantage
-        new_log_probs (Tensor): Log-probabilities mới (nếu có), shape (M,).
-        old_log_probs (Tensor): Log-probabilities cũ (nếu có), shape (M,).
-        pi_new (Tensor): Xác suất hành động theo policy mới (nếu có), shape (M,).
-        pi_old (Tensor): Xác suất hành động theo policy cũ (nếu có), shape (M,).
-        sigma_sq (Tensor): Phương sai
-        entropy_weight (float): Trọng số cho entropy.
-        epsilon (float): Giá trị clip, mặc định là 0.2.
-        sigma : giá trị để tính entropy
-
-    Returns:
-        loss (Tensor): Giá trị loss trung bình.
-    """
+def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None, entropy_weight=0.01, epsilon=0.2,
+                   mask=None):
     if new_log_probs is not None and old_log_probs is not None:
-        # Tính ratio
         ratios = torch.exp(new_log_probs - old_log_probs)
     else:
         raise ValueError("Phải cung cấp (new_log_probs, old_log_probs)")
 
-    # Clipping ratio
+    # Tổng hợp các hành động lại
+    ratios = ratios.mean(dim=2, keepdim=True)
     clipped_ratios = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
 
     # Tính surrogate loss
     surrogate_loss = torch.min(ratios * advantage, clipped_ratios * advantage)
+    if mask is not None:
+        surrogate_loss = surrogate_loss * mask.unsqueeze(-1)
 
-    # Tính entropy
-    if sigma is not None:
-        sigma = torch.clamp(sigma, min=1e-3)  # Kiểm soát sigma ko được âm
-        entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma), dim=1)
-    else:
-        entropy = torch.zeros_like(surrogate_loss)
+    # # Tính entropy
+    # if sigma is not None:
+    #     sigma = torch.clamp(sigma, min=1e-3)  # Kiểm soát sigma ko được âm
+    #     entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma) * mask.unsqueeze(-1), dim=1)
+    # else:
+    #     entropy = torch.zeros_like(surrogate_loss)
 
+    # print(f"ratios: {ratios}")
+    # print(f"clipped_ratios: {clipped_ratios}")
+    # print(f"sigma: {sigma}")
+    # print(f"surrogate_loss: {surrogate_loss}")
     # Tổng hợp loss
-    loss = -torch.mean(surrogate_loss) + entropy_weight * torch.mean(entropy)
+    loss = -torch.mean(surrogate_loss)
+    # + entropy_weight * torch.mean(entropy)
     return loss
 
 
 def ppo_loss_critic(predicted_values, returns):
-    """
-    Loss của Critic trong PPO (mean squared error).
-
-    Args:
-        predicted_values: Giá trị state-value dự đoán (shape: [batch, time, 1]).
-        returns: Giá trị kỳ vọng (shape: [batch, time, 1]).
-
-    Returns:
-        loss: Critic loss đã trung bình.
-    """
+    # Chỉ tính toán trên các giá trị không phải padding
     critic_loss = F.mse_loss(predicted_values, returns, reduction='mean')
     return critic_loss
 
 
-def compute_log_pi(actions, mu, sigma):
-    """
-    Tính log-probability của các hành động dựa trên phân phối chuẩn.
-
-    Args:
-        actions: Tensor các hành động a (batch_size x action_dim)
-        mu: Tensor giá trị trung bình mu
-        sigma: Tensor độ lệch chuẩn sigma
-
-    Returns:
-        log_pi: Tensor log-probability
-    """
+def compute_log_pi(actions, mu, sigma, ):
     normal_dist = dist.Normal(mu, sigma)  # Tạo phân phối chuẩn với mu và sigma
     log_prob = normal_dist.log_prob(actions)  # Tính log-probability
-    return log_prob.sum(dim=-1)  # Tổng log-probability trên tất cả các hành động
+
+    return log_prob
 
 
 # Mô hình Actor sử dụng LSTM
 class Actor(nn.Module):
-    def __init__(self, input_size, output_size, dropout_rate=0.2):
+    def __init__(self, input_size, output_size, pTarget_range, lengths_traj=None,
+                 dropout_rate=0.2):
         self.input_size = input_size
         self.output_size = output_size
+        # self.dynamics_randomization = dynamics_randomization
+        self.pTarget_min = torch.tensor([v[0] for v in pTarget_range.values()])
+        self.pTarget_max = torch.tensor([v[1] for v in pTarget_range.values()])
+
+        self.lengths_traj = lengths_traj  # Xử lý các dữ liệu padding khi train
         super(Actor, self).__init__()
+        # LSTM layers
         self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
-        self.dropout1 = nn.Dropout(dropout_rate)  # Dropout để tránh overfitting
+        # self.activation1 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
+        # self.dropout1 = nn.Dropout(dropout_rate)  # Dropout 1
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
-        self.dropout2 = nn.Dropout(dropout_rate)
-        # Fully Connected layers for enhanced learning
+        # self.activation2 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
+        # self.dropout2 = nn.Dropout(dropout_rate)  # Dropout 2
+
+        # Fully Connected layer
         self.output_layer = nn.Sequential(
-            nn.Linear(128, output_size),  # Hidden layer 1
-            nn.Dropout(dropout_rate)
+            nn.Linear(128, output_size),  # Kết nối đầy đủ
+            # nn.Dropout(dropout_rate)  # Dropout cuối
         )
 
     def forward(self, x):
@@ -112,31 +100,77 @@ class Actor(nn.Module):
         if x.device != device:
             x = x.to(device)
 
-        x, _ = self.lstm1(x)  # Đầu vào qua LSTM1
-        x = self.dropout1(x)  # Dropout
-        x, _ = self.lstm2(x)  # Đầu vào qua LSTM2
-        x = self.dropout2(x)
-        # Đầu ra cuối cùng
-        output = self.output_layer(x)
+        if self.pTarget_min.device != device:
+            self.pTarget_min = self.pTarget_min.to(device)
+            self.pTarget_max = self.pTarget_max.to(device)
 
-        # Chia thành 2 phần: 40 giá trị đầu (mu), 40 giá trị cuối (sigma)
-        mu = output[..., :40]  # Lấy 40 giá trị đầu tiên
-        sigma = output[..., 40:]  # Lấy 40 giá trị cuối cùng
+        # Xử lý padding khi train
+        if self.lengths_traj is not None:
+            x = pack_padded_sequence(x, self.lengths_traj, batch_first=True, enforce_sorted=False)
+        x, _ = self.lstm1(x)
+        # if self.lengths_traj is not None:
+        #     x, _ = pad_packed_sequence(x, batch_first=True)  # Giải nén PackedSequence về tensor
+        # x = self.activation1(x)
+        # x = self.dropout1(x)
+        # if self.lengths_traj is not None:
+        #     x = pack_padded_sequence(x, self.lengths_traj, batch_first=True, enforce_sorted=False)
+        x, _ = self.lstm2(x)
+        # x = self.activation2(x)
+        # x = self.dropout2(x)
+        if self.lengths_traj is not None:
+            x, _ = pad_packed_sequence(x, batch_first=True)  # Giải nén PackedSequence về tensor
+        # Fully Connected layer
+        output = self.output_layer(x)
+        # Đầu ra cuối cùng
+
+        # Kiểm tra đầu ra của LSTM
+        if self.lengths_traj is not None:
+            mask = create_mask(output.size(0), output.size(1), self.lengths_traj, device)
+        else:
+            mask = None
+
+        # Chia thành 2 phần: 30 giá trị đầu (mu), 30 giá trị cuối (sigma)
+        mu = output[..., :30]  # Lấy 40 giá trị đầu tiên
+        sigma = output[..., 30:]  # Lấy 40 giá trị cuối cùng
+
+        # Tách thành 3 phần: pTarget_mu, pGain_mu, dGain_mu
+        pTarget_mu = mu[..., :10]  # Lấy 10 giá trị đầu tiên từ mu
+        pGain_mu = mu[..., 10:20]  # Lấy 10 giá trị tiếp theo từ mu
+        dGain_mu = mu[..., 20:30]  # Lấy 10 giá trị cuối từ mu
+
+        # Áp dụng tanh cho pTarget_mu (để chuẩn hóa trong khoảng [-1, 1])
+        # print("MIN MAX: ", self.pTarget_max, self.pTarget_min)
+        pTarget_mu = self.pTarget_min + (self.pTarget_max - self.pTarget_min) * (torch.tanh(pTarget_mu) + 1) / 2
+        # print("ĐẦU RA: ", pTarget_mu)
+
+        # Áp dụng softplus cho pGain_mu và dGain_mu (để đảm bảo giá trị dương)
+        pGain_mu = F.softplus(pGain_mu)
+        dGain_mu = F.softplus(dGain_mu)
+
+        # Gộp các mu lại
+        mu = torch.cat([pTarget_mu, pGain_mu, dGain_mu], dim=-1)
 
         # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
         sigma = nn.functional.softplus(sigma)
+        # print("SHAPE sigma:", sigma.shape)
 
-        return mu, sigma
+        if mask is None:
+            mu = mu.reshape(-1)
+            sigma = sigma.reshape(-1)
+            return mu, sigma
+        else:
+            return mu, sigma, mask
 
     # Lưu trạng thái mô hình
     def save_model(self, path):
-        # Kiểm tra nếu file tồn tại
-        if os.path.exists(path):
-            os.remove(path)  # Xóa file cũ
-            # print(f"File {path} existed and was deleted.")
 
-        # Lưu mô hình vào file
-        torch.save(self.state_dict(), path)
+        try:
+            torch.save(self.state_dict(), path)
+            # print(f"Model saved successfully at {path}")
+        except Exception as e:
+            pass
+            print(f"Error saving model to {path}: {e}")
+
         # tạo thêm file cho việc hiển thị để tránh tranh chấp tài nguyên
         if 'actor' in str(path):
             # Tìm vị trí cần chèn
@@ -144,37 +178,50 @@ class Actor(nn.Module):
             # Tạo chuỗi mới bằng cách chèn "viewer_" vào
             if insert_position != -1:
                 modified_path = path[:insert_position] + "viewer_" + path[insert_position:]
-                torch.save(self.state_dict(), modified_path)
+                try:
+                    torch.save(self.state_dict(), modified_path)
+                    # print(f"Model saved successfully at {modified_path}")
+                except Exception as e:
+                    print(f"Error saving model to {modified_path}: {e}")
             else:
                 modified_path = path  # Giữ nguyên nếu "actor_epoch" không tồn tại
-                torch.save(self.state_dict(), modified_path)
+                try:
+                    torch.save(self.state_dict(), modified_path)
+                    # print(f"Model saved successfully at {modified_path}")
+                except Exception as e:
+                    print(f"Error saving model to {modified_path}: {e}")
         # print(f"Model saved successfully at {path}")
 
     # Tải trạng thái mô hình
     def load_model(self, path):
-        with open(path, 'rb') as f:  # Đảm bảo file được đóng sau khi load
-            model_state = torch.load(f, weights_only=True)
-        self.load_state_dict(model_state)
-        self.eval()  # tắt dropout và batch normalization
+        try:
+            # Tải trọng số (weights_only=True để tránh cảnh báo)
+            model_state = torch.load(path, weights_only=True)
+            self.load_state_dict(model_state)
+            self.eval()  # Đặt chế độ inference
+            # print(f"Model weights loaded successfully from {path}")
+        except Exception as e:
+            print(f"Error loading model weights from {path}: {e}")
 
 
 class Critic(nn.Module):
-    def __init__(self, input_size, dropout_rate=0.1):
+    def __init__(self, input_size, lengths_traj=None, dropout_rate=0.1):
+
+        self.lengths_traj = lengths_traj  # Xử lý padding khi train
         super(Critic, self).__init__()
-        self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)
-        self.dropout1 = nn.Dropout(dropout_rate)
-        self.lstm2 = nn.LSTM(128, 128, batch_first=True)
-        self.dropout2 = nn.Dropout(dropout_rate)
-        # Fully Connected layers for enhanced learning
-        self.fc1 = nn.Sequential(
-            nn.Linear(128, 128),  # Hidden layer 1
-            nn.Dropout(dropout_rate)
+        # LSTM layers
+        self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
+        # self.activation1 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
+        # self.dropout1 = nn.Dropout(dropout_rate)  # Dropout 1
+        self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
+        # self.activation2 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
+        # self.dropout2 = nn.Dropout(dropout_rate)  # Dropout 2
+
+        # Fully Connected layer
+        self.output_layer = nn.Sequential(
+            nn.Linear(128, 1),  # Kết nối đầy đủ
+            # nn.Dropout(dropout_rate)  # Dropout cuối
         )
-        self.fc2 = nn.Sequential(
-            nn.Linear(128, 64),  # Hidden layer 2
-            nn.Dropout(dropout_rate)
-        )
-        self.output_layer = nn.Linear(64, 1)  # Critic chỉ có 1 giá trị đầu ra (hàm giá trị)
 
     def forward(self, x):
         # Kiểm tra và chuyển x về thiết bị của mô hình
@@ -182,72 +229,88 @@ class Critic(nn.Module):
         if x.device != device:
             x = x.to(device)
 
+        # Xử lý padding khi train
+        if self.lengths_traj is not None:
+            x = pack_padded_sequence(x, self.lengths_traj.int(), batch_first=True, enforce_sorted=False)
         x, _ = self.lstm1(x)
-        x = self.dropout1(x)
+        # if self.lengths_traj is not None:
+        #     x, _ = pad_packed_sequence(x, batch_first=True)  # Giải nén PackedSequence về tensor
+        # x = self.activation1(x)
+        # x = self.dropout1(x)
+        # if self.lengths_traj is not None:
+        #     x = pack_padded_sequence(x, self.lengths_traj, batch_first=True, enforce_sorted=False)
         x, _ = self.lstm2(x)
-        x = self.dropout2(x)
-        x = self.fc1(x)
-        x = self.fc2(x)
-        return self.output_layer(x)  # Giá trị dự đoán cuối cùng
+        # x = self.activation2(x)
+        # x = self.dropout2(x)
+        if self.lengths_traj is not None:
+            x, _ = pad_packed_sequence(x, batch_first=True)  # Giải nén PackedSequence về tensor
+        # Fully Connected layer
+        output = self.output_layer(x)
+
+        return output  # Giá trị dự đoán cuối cùng
 
     # Lưu trạng thái mô hình
     def save_model(self, path):
-        # Kiểm tra nếu file tồn tại
-        if os.path.exists(path):
-            os.remove(path)  # Xóa file cũ
-            # print(f"File {path} existed and was deleted.")
+        try:
+            torch.save(self.state_dict(), path)
+            # print(f"Model saved successfully at {path}")
+        except Exception as e:
+            print(f"Error saving model to {path}: {e}")
 
-        # Lưu mô hình vào file
-        torch.save(self.state_dict(), path)
-        # print(f"Model saved successfully at {path}")
+        # Tải trạng thái mô hình
 
-    # Tải trạng thái mô hình
     def load_model(self, path):
-        with open(path, 'rb') as f:  # Đảm bảo file được đóng sau khi load
-            model_state = torch.load(f, weights_only=True)
-        self.load_state_dict(model_state)
-        self.eval()  # tắt dropout và batch normalization
+        try:
+            # Tải trọng số (weights_only=True để tránh cảnh báo)
+            model_state = torch.load(path, weights_only=True)
+            self.load_state_dict(model_state)
+            self.eval()  # Đặt chế độ inference
+            # print(f"Model weights loaded successfully from {path}")
+        except Exception as e:
+            print(f"Error loading model weights from {path}: {e}")
 
 
 class PPOClip_Training:
+    # Biến tĩnh tính toán số lần khởi tạo training (= số lần training)
+    iter_counter = 0
+
     def __init__(self,
-                 training_id,
-                 max_training_id,
+                 iters_passed,
                  actor_model,
                  critic_model,
                  states,
                  actions,
                  log_probs,
-                 sigma,
                  rewards,
                  returns,
                  advantages,
+                 is_save,
                  epsilon=0.2,
                  entropy_weight=0.01,
                  num_epochs=4,
                  actor_learning_rate=0.0001,
-                 critic_learning_rate=0.00005,
+                 critic_learning_rate=0.0001,
                  path_dir="models/param/"
                  ):
-        self.training_id = training_id
+        self.iterations = iters_passed
         self.path_dir = path_dir
         self.actor = actor_model
         self.critic = critic_model
         self.states = states
         self.actions = actions
         self.log_probs = log_probs
-        self.sigma = sigma
         self.rewards = rewards
         self.returns = returns
         self.advantages = advantages
         self.epsilon = epsilon
         self.entropy_weight = entropy_weight
         self.epochs = num_epochs
+        self.is_save = is_save
+        self.best_reward = None
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
 
-        self.max_epoch = max_training_id*self.epochs
     """
     Hàm huấn luyện chính cho PPO với clipping.
 
@@ -273,48 +336,9 @@ class PPOClip_Training:
     crt_epoch = 0  # số epoch hiện tại
     train_data = []  # Danh sách lưu trữ 10 epoch gần nhất
 
-    @classmethod
-    def update_epoch_data(cls, rewards_history, actor_loss_history, critic_loss_history):
-        """
-        Cập nhật dữ liệu cho epoch mới nhất và chỉ giữ lại 10 giá trị gần nhất.
-        """
-        # Thêm dữ liệu mới vào danh sách
-        cls.train_data.append({
-            "rewards_history": rewards_history,  # Giá trị reward cuối cùng
-            "actor_loss_history": actor_loss_history,  # Giá trị actor loss cuối cùng
-            "critic_loss_history": critic_loss_history  # Giá trị critic loss cuối cùng
-        })
-
-        # Giữ lại 5 giá trị mới nhất
-        if len(cls.train_data) > 5:
-            cls.train_data.pop(0)  # Xóa giá trị cũ nhất
-
-    @classmethod
-    def check_convergence(cls, epsilon=0.1):
-        """
-        Kiểm tra xem 1 trong 3 giá trị có không đổi qua 10 epoch hay không.
-        Trả về True nếu không đổi, ngược lại trả về False.
-        """
-        if len(cls.train_data) < 5 or cls.crt_epoch > 0.8*cls.max_epoch:
-            return False, None  # Chưa đủ 10 epoch để kiểm tra
-
-        # Kiểm tra từng thông tin xem có không đổi hay thay đổi ít hơn ngưỡng không
-        for key in ["rewards", "actor_loss", "critic_loss"]:
-            values = [epoch[key] for epoch in cls.train_data]
-
-            # Kiểm tra nếu ít nhất 1 giá trị thay đổi ít hơn ngưỡng epsilon
-            if all(abs(v - values[0]) < epsilon for v in values):
-                print(f"Convergence detected in {key}!")
-                return True, key
-
-        return False, None
-
-    # Biến lớp, dùng chung cho tất cả các đối tượng
-    best_reward = -float('inf')  # Đây là biến lớp
-
     def train(self):
         # Tạo các danh sách lưu trữ giá trị
-        epochs_history = []
+        iterations_history = []
         rewards_history = []
         entropy_history = []
         actor_loss_history = []
@@ -323,141 +347,121 @@ class PPOClip_Training:
         # ====== THAY ĐỔI LEARNING RATE VÀ ENTROPY WEIGHT ==========
         # Kiểm tra xem mô hình có đang bị vướng vào điểm cực trị cục bộ
         # hoặc là không khám phá thêm được gì mới (entropy ít biến động)
-        isCnv, key = self.check_convergence(epsilon=0.1)
-        if isCnv:
-            if key == "rewards":
-                self.entropy_weight = self.entropy_weight  # tăng khám phá
-            elif key == "actor_loss":
-                self.actor_optimizer.param_groups[0]['lr'] *= 1.5
-            elif key == "critic_loss":
-                self.critic_optimizer.param_groups[0]['lr'] *= 1.5
-            else:
-                print("Lỗi khi xét hội tụ")
-        else:
-            self.entropy_weight = max(self.entropy_weight * (0.99 ** PPOClip_Training.crt_epoch),
-                                      self.entropy_weight)  # Annealing entropy
+
+        self.entropy_weight *= 0.99 ** self.iterations  # Annealing entropy
 
         # Chuẩn hóa advantages
         self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
-        for epoch in range(self.epochs):
-            # ** ------------- Huấn luyện Actor -----------------**
-            # Forward qua model để tính các giá trị mới
-            mu, sigma = self.actor(self.states)  # Tương thích với cấu trúc batch
+        # ** ------------- Huấn luyện Actor -----------------**
+        # Forward qua model để tính các giá trị mới
+        mu, sigma, mask = self.actor(self.states)  # Tương thích với cấu trúc batch
+        # print("NGOÀI _ Sigma:", sigma.min(), sigma.max(), sigma.shape)
+        # Tính log-probabilities mới
+        new_log_probs = compute_log_pi(self.actions, mu, sigma)  # Thêm chiều để khớp shape
 
-            # Tính log-probabilities mới
-            new_log_probs = compute_log_pi(self.actions, mu, sigma).unsqueeze(-1)  # Thêm chiều để khớp shape
+        # Tính loss
+        actor_loss = ppo_loss_actor(advantage=self.advantages,
+                                    new_log_probs=new_log_probs,
+                                    old_log_probs=self.log_probs,
+                                    sigma=sigma,
+                                    entropy_weight=self.entropy_weight,
+                                    epsilon=self.epsilon,
+                                    mask=mask)
+        # Backward Actor
+        self.actor_optimizer.zero_grad()
+        # Tính gradient cho Actor
+        actor_loss.backward()  # Tính backward để giữ đồ thị
+        # # In giá trị gradient của các tham số trong Actor
+        # print("\n=== Gradient của Actor ===")
+        # for name, param in self.actor.named_parameters():
+        #     if param.grad is not None:
+        #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+        #         print(f"{name} - Gradient norm: {grad_norm}")
+        #     else:
+        #         print(f"{name} không có gradient!")
+        self.actor_optimizer.step()  # Cập nhật tham số của Actor
 
-            # Tính loss
-            PPOClip_Training.crt_epoch = self.epochs * self.training_id + epoch + 1  # tính chỉ số epoch hiện tại
-            crt_epoch = PPOClip_Training.crt_epoch
-            actor_loss = ppo_loss_actor(advantage=self.advantages,
-                                        new_log_probs=new_log_probs,
-                                        old_log_probs=self.log_probs,
-                                        sigma=self.sigma,
-                                        entropy_weight=self.entropy_weight,
-                                        epsilon=self.epsilon)
-            # Backward Actor
-            self.actor_optimizer.zero_grad()
-            # actor_loss.backward()  # Tính gradient cho Actor
-            actor_loss.backward()  # Tính backward để giữ đồ thị
-            # # In giá trị gradient của các tham số trong Actor
-            # print("\n=== Gradient của Actor ===")
-            # for name, param in self.actor.named_parameters():
-            #     if param.grad is not None:
-            #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
-            #         print(f"{name} - Gradient norm: {grad_norm}")
-            #     else:
-            #         print(f"{name} không có gradient!")
-            self.actor_optimizer.step()  # Cập nhật tham số của Actor
+        # ** ------------- Huấn luyện Critic -----------------*
+        # Backward Critic
+        # Forward qua model để tính các giá trị mới
+        predict_critic = self.critic(self.states)
+        # Tính loss
+        critic_loss = ppo_loss_critic(predict_critic, self.returns)
+        self.critic_optimizer.zero_grad()
+        # Tính gradient cho Critic
+        critic_loss.backward()  # Tính backward để giữ đồ thị
+        # In giá trị gradient của các tham số trong Critic
+        # print("\n=== Gradient của Critic ===")
+        # for name, param in self.critic.named_parameters():
+        #     if param.grad is not None:
+        #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
+        #         print(f"{name} - Gradient norm: {grad_norm}")
+        #     else:
+        #         print(f"{name} không có gradient!")
 
-            # ** ------------- Huấn luyện Critic -----------------*
-            # Backward Critic
-            # Forward qua model để tính các giá trị mới
-            predict_critic = self.critic(self.states)
-            # Tính loss
-            critic_loss = ppo_loss_critic(predict_critic, self.returns)
-            self.critic_optimizer.zero_grad()
-            # self.critic_loss.backward()  # Tính gradient cho Critic
-            critic_loss.backward()  # Tính backward để giữ đồ thị
-            # In giá trị gradient của các tham số trong Critic
-            # print("\n=== Gradient của Critic ===")
-            # for name, param in self.critic.named_parameters():
-            #     if param.grad is not None:
-            #         grad_norm = param.grad.norm(2).item()  # Tính L2 norm của gradient
-            #         print(f"{name} - Gradient norm: {grad_norm}")
-            #     else:
-            #         print(f"{name} không có gradient!")
+        self.critic_optimizer.step()  # Cập nhật tham số của Critic
 
-            self.critic_optimizer.step()  # Cập nhật tham số của Critic
+        # Lưu mô hình sau khi xong 1 iterator (4 epoch)
+        # Tính entropy để theo dõi mức độ ngẫu nhiên của policy
+        iterations_history.append(self.iterations)
+        entropy = -torch.sum(sigma.log(), dim=-1).mean()  # Entropy tính từ sigma
+        entropy_history.append(entropy.item())  # Lưu lại Entropy
+        actor_loss_history.append(actor_loss.item())  # Lưu lại Actor loss
+        critic_loss_history.append(critic_loss.item())  # Lưu lại Critic loss
+        # Tính reward trung bình
+        mean_reward = self.rewards.mean().item()
+        rewards_history.append(mean_reward)  # Lưu lại reward
 
-            # Lưu mô hình sau khi xong 1 iterator (4 epoch)
-            # Tính entropy để theo dõi mức độ ngẫu nhiên của policy
-            epochs_history.append(crt_epoch)
-            entropy = -torch.sum(sigma.log(), dim=-1).mean()  # Entropy tính từ sigma
-            entropy_history.append(entropy.item())  # Lưu lại Entropy
-            actor_loss_history.append(actor_loss.item())  # Lưu lại Actor loss
-            critic_loss_history.append(critic_loss.item())  # Lưu lại Critic loss
-            # Tính reward trung bình
-            mean_reward = self.returns.mean().item()
-            rewards_history.append(mean_reward)  # Lưu lại reward
+        # =========== LƯU THÔNG TIN MÔ HÌNH SAU KHI HUẤN LUYỆN ===================
 
-            print(
-                f"Epoch {epoch + 1}/{self.epochs}: Actor Loss: {actor_loss.item()}, "
-                f"Critic Loss: {critic_loss.item()},"
-                f"Reward Mean: {mean_reward}")
-            # =========== LƯU THÔNG TIN MÔ HÌNH SAU KHI HUẤN LUYỆN ===================
-
-            # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
-            if mean_reward > PPOClip_Training.best_reward:
-                PPOClip_Training.best_reward = mean_reward
-                best_actor_model = self.actor.state_dict()  # Lưu tham số của actor model
-                best_critic_model = self.critic.state_dict()  # Lưu tham số của critic model
-
-                # Lưu mô hình tốt nhất
-                torch.save({
-                    'actor_model': best_actor_model,
-                    'critic_model': best_critic_model,
-                    'reward': PPOClip_Training.best_reward,
-                }, f"{self.path_dir}best_model.pth")
-
-            # # Sau mỗi epoch, lưu mô hình Actor và Critic
-            self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
-            self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
-
-            # # Sau mỗi epoch, lưu mô hình Actor và Critic cuối cùng
-            # num_epoch = self.epochs * self.training_id + epoch + 1
-            # self.actor.save_model(f"{self.path_dir}actor_epoch_{num_epoch}.pth")
-            # self.critic.save_model(f"{self.path_dir}critic_epoch_{num_epoch}.pth")
-
-        # Kiểm tra file log đã tồn tại hay chưa
-        log_file = f"{self.path_dir}training_metrics_all.pth"
-        if os.path.exists(log_file):
-            # Nếu đã có log, load dữ liệu cũ
-            training_log = torch.load(log_file, weights_only=True)
+        # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
+        if self.iterations == 0:
+            self.best_reward = mean_reward
         else:
-            # Nếu chưa có log, tạo file mới
-            training_log = []
+            if self.best_reward is not None:
+                if mean_reward > self.best_reward:
+                    self.best_reward = mean_reward
+                    best_actor_model = self.actor.state_dict()  # Lưu tham số của actor model
+                    best_critic_model = self.critic.state_dict()  # Lưu tham số của critic model
 
-        # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
-        training_log.append({
-            "epochs_history": epochs_history[-1],
-            "rewards_history": rewards_history[-1],
-            "entropy_history": entropy_history[-1],
-            "actor_loss_history": actor_loss_history[-1],
-            "critic_loss_history": critic_loss_history[-1]
-        })
+                    # Lưu mô hình tốt nhất
+                    torch.save({
+                        'actor_model': best_actor_model,
+                        'critic_model': best_critic_model,
+                        'reward': self.best_reward,
+                    }, f"{self.path_dir}best_model.pth")
 
-        # Lưu lại 10 giá trị mới nhất để kiểm tra xem có bị kẹt khi huấn luyện hay không
-        self.update_epoch_data(rewards_history=rewards_history[-1],
-                               actor_loss_history=actor_loss_history[-1],
-                               critic_loss_history=critic_loss_history[-1])
+        # lưu mô hình Actor và Critic, sau mỗi
+        PPOClip_Training.iter_counter += 1
+        if self.is_save:
+            if PPOClip_Training.iter_counter % 10 == 0:
+                self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
+                self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
 
-        # Lưu lại toàn bộ log
-        torch.save(training_log, log_file)
+                # Kiểm tra file log đã tồn tại hay chưa
+                log_file = f"{self.path_dir}training_metrics_all.pth"
+                if os.path.exists(log_file):
+                    # Nếu đã có log, load dữ liệu cũ
+                    training_log = torch.load(log_file, weights_only=True)
+                else:
+                    # Nếu chưa có log, tạo file mới
+                    training_log = []
 
+                # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
 
-# ==================== TÌM THAM SỐ MÔ HÌNH VÀ LOAD LÊN MODLE =================
+                training_log.append({
+                    "iterations_history": PPOClip_Training.iter_counter,
+                    "rewards_history": rewards_history[-1],
+                    "entropy_history": entropy_history[-1],
+                    "actor_loss_history": actor_loss_history[-1],
+                    "critic_loss_history": critic_loss_history[-1]
+                })
+
+                # Lưu lại toàn bộ log
+                torch.save(training_log, log_file)
+
+        return actor_loss.item(), critic_loss.item(), mean_reward
 
 
 def find_latest_model(prefix, directory="."):
@@ -471,21 +475,3 @@ def find_latest_model(prefix, directory="."):
 
     # Trả về file mới nhất
     return os.path.join(directory, files[0])
-
-# def find_latest_model(prefix, directory="."):
-#     """
-#     Tìm file model mới nhất trong thư mục với prefix.
-#
-#     Args:
-#         prefix (str): Tiền tố của file (vd: 'actor_epoch_').
-#         directory (str): Thư mục chứa các file model.
-#
-#     Returns:
-#         str: Đường dẫn đến file model mới nhất.
-#     """
-#     files = [f for f in os.listdir(directory) if f.startswith(prefix) and f.endswith(".pth")]
-#     if not files:
-#         return None  # Không tìm thấy file
-#     # Sắp xếp file theo số epoch
-#     files = sorted(files, key=lambda x: int(re.search(r'\d+', x).group()), reverse=True)
-#     return os.path.join(directory, files[0])  # File mới nhất

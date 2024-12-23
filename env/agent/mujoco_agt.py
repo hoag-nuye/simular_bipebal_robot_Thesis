@@ -20,7 +20,7 @@ from lxml import etree
 from env.mujoco_env import Environment
 
 from env.agent.support import get_clock
-from env.agent.dataclass_agt import SensorFields, AgentState, StateFields, ActuatorFields
+from env.agent.dataclass_agt import AgentState, StateFields, ActuatorFields, JointFields
 
 '''
 # Mục lục các nhóm function
@@ -102,11 +102,13 @@ class Agent:
         self.sensors_map = self.get_sensors_map()
         self.sensors_data = self.agt_data.sensordata
         self.state_map = self.__get_map_name2id(StateFields)
-        self.atr_map = self.__get_map_name2id(ActuatorFields)
-        self.atr_ctrl_map = self.get_actuators_map()
-        self.atr_num = len(self.atr_map[next(iter(self.atr_map))])
+        self.atr_map = self.__get_map_name2id(
+            ActuatorFields)  # Chứa đo vị trí sensor của khớp vị điều khiển bởi actutor
+        self.atr_ctrl_map = self.get_actuators_map()  # Chứa vị trí của actuator
+        self.atr_num = len(self.atr_map[next(iter(self.atr_map))])  # Tính số lượng actuator
         self.atr_ctrl_ranges = self.extract_ctrl_ranges()
-        self.a_t_sub1 = np.zeros(self.atr_num * 4)  # Được tính từ pTarget, pGain, dGain
+        self.dTarget_ranges = self.extract_dTarget_ranges()
+        self.a_t_sub1 = np.zeros(self.atr_num * 3)  # Được tính từ pTarget, pGain, dGain
         self.ctrl_min = torch.tensor([v[0] for v in self.atr_ctrl_ranges.values()])
         self.ctrl_max = torch.tensor([v[1] for v in self.atr_ctrl_ranges.values()])
         print('Setup is done !')
@@ -114,18 +116,15 @@ class Agent:
     # ========================= THIẾT LẬP TRẠNG THÁI BẮT ĐẦU =========================
 
     def get_foot_forces_z(self):
-        """
-        Lấy lực tiếp xúc trục z (thành phần thứ 3) của hai chân.
-        """
-        left_fz = self.S_t.left_foot_force[2]
-        right_fz = self.S_t.right_foot_force[2]
-        return left_fz, right_fz
+        left_foot_force = np.linalg.norm(self.S_t.left_foot_force) ** 2 / 100 * bool(self.S_t.left_foot_touch)
+        right_foot_force = np.linalg.norm(self.S_t.right_foot_force) ** 2 / 100 * bool(self.S_t.right_foot_touch)
+        return left_foot_force, right_foot_force
 
     def get_tilt_angle(self):
-        w = self.S_t.pelvis_orientation[0]
-        x = self.S_t.pelvis_orientation[1]
-        y = self.S_t.pelvis_orientation[2]
-        z = self.S_t.pelvis_orientation[3]
+        w = self.S_t.pelvis_orientation[0].item()
+        x = self.S_t.pelvis_orientation[1].item()
+        y = self.S_t.pelvis_orientation[2].item()
+        z = self.S_t.pelvis_orientation[3].item()
         """
             Chuyển đổi quaternion (x, y, z, w) sang góc Euler (roll, pitch, yaw).
             Các góc trả về theo đơn vị radian.
@@ -145,17 +144,16 @@ class Agent:
         # t4 = 1.0 - 2.0 * (y * y + z * z)
         # yaw = math.atan2(t3, t4)
 
-        return math.degrees(math.sqrt(roll**2 + pitch**2))
-
+        return math.degrees(math.sqrt(roll ** 2 + pitch ** 2))
 
     def set_state_begin(self):
         # Đặt trạng thái ban đầu trong qpos (giá trị từ key XML)
-        self.agt_data.qpos[:] = [-0.00951869, -2.10186e-06, 0.731217, 0.997481, -6.09803e-05, -0.0709308,
-                                 -9.63422e-05, 0.00712554, 0.0138893, 0.741668, 0.826119, -0.00862023,
-                                 0.0645049, -0.559726, -1.98545, -0.00211571, 2.20938, -0.00286638,
-                                 -1.87213, 1.85365, -1.978, -0.00687543, -0.0135461, 0.741728, 0.826182,
-                                 -0.00196479, -0.057323, -0.560476, -1.98537, -0.00211578, 2.20931,
-                                 -0.00286634, -1.87219, 1.85371, -1.97806]
+        self.agt_data.qpos[:] = [0, 0, 1.0059301, 1, 0, 0, 0, 0.00449956, 0, 0.497301, 0.97861, -0.0164104,
+                                 0.0177766, -0.204298, -1.1997, 0, 1.42671, -2.25907e-06, -1.52439, 1.50645,
+                                 -1.59681, -0.00449956, 0, 0.497301, 0.97874, 0.0038687, -0.0151572, -0.204509,
+                                 -1.1997, 0, 1.42671, 0, -1.52439, 1.50645, -1.59681
+                                 ]
+
         # Cập nhật trạng thái mô phỏng
         mujoco.mj_forward(self.agt_model, self.agt_data)
         self.agt_data.qvel[:] = 0  # Đặt vận tốc bằng 0
@@ -289,6 +287,12 @@ class Agent:
             joint_velocities=np.array([
                 self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_velocities]
             ]),
+            left_foot_touch=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_touch]
+            ]),
+            right_foot_touch=np.array([
+                self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_touch]
+            ]),
             left_foot_force=np.array([
                 self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_force]
             ]),
@@ -355,31 +359,17 @@ class Agent:
 
         return state_map_dict
 
-    def get_sensors_info(self):
-        """
-        Lấy thông tin trạng thái của agent từ các cảm biến của MuJoCo.
-        Trả về một dictionary chứa thông số trạng thái của agent.
-        """
-        sensors_dict = {}
-
-        # Lặp qua các cảm biến định nghĩa trong SensorFields
-        for sensor_field in SensorFields:
-            sensor_name = sensor_field.value
-            sensor_id = self.sensors_map[sensor_name]
-
-            # Lấy thông tin về kích thước (dim) và vị trí (adr) của cảm biến
-            sensor_dim = self.agt_model.sensor_dim[sensor_id]
-            sensor_offset = self.agt_model.sensor_adr[sensor_id]
-
-            # Nếu cảm biến có nhiều giá trị, trích xuất tất cả giá trị
-            if sensor_dim > 1:
-                sensors_dict[sensor_name] = self.agt_data.sensordata[sensor_offset: sensor_offset + sensor_dim]
-            else:
-                sensors_dict[sensor_name] = self.agt_data.sensordata[sensor_offset]
-
-        return sensors_dict
-
     # ========================= ACTION CONTROL =========================
+    def extract_dTarget_ranges(self):
+        dTarget_ranges = {}
+        for i in range(self.agt_model.njnt):
+            joint_name = mujoco.mj_id2name(self.agt_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            if joint_name in JointFields.joint_positions.value:
+                dTargetRanges = self.agt_model.jnt_range[i]
+                dTarget_ranges[joint_name] = tuple(dTargetRanges)
+                # print(joint_name, ": ", tuple(dTargetRanges))
+        return dTarget_ranges
+
     def extract_ctrl_ranges(self):
         """
         Trích xuất ctrlrange từ mô hình đã tải của MuJoCo.
@@ -393,8 +383,8 @@ class Agent:
         ctrl_ranges = {}
         for i in range(self.agt_model.nu):  # model.nu: Số lượng actuator
             name = mujoco.mj_id2name(self.agt_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
-            ctrlrange = self.agt_model.actuator_ctrlrange[i]
-            ctrl_ranges[name] = tuple(ctrlrange)
+            ctrlRange = self.agt_model.actuator_ctrlrange[i]
+            ctrl_ranges[name] = tuple(ctrlRange)
         return ctrl_ranges
 
     # Tính toán torque
@@ -416,57 +406,80 @@ class Agent:
             :param exploration_noise_std: Hệ số noise cho phép agent không phụ thuộc quá nhiều
             vào sigma -> tăng khám phá
         """
+
         # Kiểm tra điều kiện đầu vào
-        assert mu.shape[-1] == self.atr_num * 4, "Số lượng mu không khớp với số actuator * 4."
-        assert sigma.shape[-1] == self.atr_num * 4, "Số lượng sigma không khớp với số actuator * 4."
+        assert mu.shape[-1] == self.atr_num * 3, "Số lượng mu không khớp với số actuator * 4."
+        assert sigma.shape[-1] == self.atr_num * 3, "Số lượng sigma không khớp với số actuator * 4."
         assert q.shape[0] == self.atr_num, "Số actuator trong q không khớp với current_actuator."
         assert qd.shape[0] == self.atr_num, "Số actuator trong qd không khớp với current_actuator."
 
-        # Tạo noise Gaussian để thêm vào mu và sigma
-        noise_mu = torch.normal(mean=torch.zeros_like(mu), std=exploration_noise_std)
-        noise_sigma = torch.normal(mean=torch.zeros_like(sigma), std=exploration_noise_std)
-
-        # Thêm noise vào mu và sigma
-        mu = mu + noise_mu
-        sigma = torch.clamp(sigma + noise_sigma, min=1e-3)  # Đảm bảo sigma > 0
-
         # Tách mu và sigma
-        pTarget_mu, dTarget_mu = mu[:, :, : self.atr_num], mu[:, :, self.atr_num:self.atr_num * 2]
-        pGain_mu, dGain_mu = mu[:, :, self.atr_num * 2:self.atr_num * 3], mu[:, :, self.atr_num * 3:self.atr_num * 4]
+        pTarget_mu, dTarget_mu = mu[: self.atr_num], mu[: self.atr_num]
+        pGain_mu, dGain_mu = mu[self.atr_num:self.atr_num * 2], mu[self.atr_num * 2:self.atr_num * 3]
 
-        pTarget_sigma, dTarget_sigma = (sigma[:, :, :self.atr_num],
-                                        sigma[:, :, self.atr_num:self.atr_num * 2])
+        pTarget_sigma, dTarget_sigma = (sigma[self.atr_num],
+                                        sigma[self.atr_num])
 
-        pGain_sigma, dGain_sigma = (sigma[:, :, self.atr_num * 2:self.atr_num * 3],
-                                    sigma[:, :, self.atr_num * 3:self.atr_num * 4])
+        pGain_sigma, dGain_sigma = (sigma[self.atr_num:self.atr_num * 2],
+                                    sigma[self.atr_num * 2:self.atr_num * 3])
 
         # Lấy mẫu từ phân phối
 
         dist_pTarget = torch.distributions.Normal(pTarget_mu, pTarget_sigma)
         sampled_pTarget = dist_pTarget.sample()
-        dist_dTarget = torch.distributions.Normal(dTarget_mu, dTarget_sigma)
-        sampled_dTarget = dist_dTarget.sample()
+        # dist_dTarget = torch.distributions.Normal(dTarget_mu, dTarget_sigma)
+        # sampled_dTarget = dist_dTarget.sample()
         dist_pGain = torch.distributions.Normal(pGain_mu, pGain_sigma)
         sampled_pGain = dist_pGain.sample()
-        dist_dGain = torch.distributions.Normal(dGain_mu, dGain_sigma)
+        dist_dGain = torch.distributions.Normal(dGain_mu, dGain_sigma )
         sampled_dGain = dist_dGain.sample()
 
-        # relu giá trị gain
-        sampled_pGain = torch.relu(sampled_pGain)
-        sampled_dGain = torch.relu(sampled_dGain)
         # Tính toán torque
         torque = []
         for i in range(self.atr_num):
-            torque_i = sampled_pGain[0, 0, i] * (sampled_pTarget[0, 0, i] - q[i]) + \
-                       sampled_dGain[0, 0, i] * (sampled_dTarget[0, 0, i] - qd[i])
+            torque_i = sampled_pGain[i] * (sampled_pTarget[i] - q[i]) + \
+                       sampled_dGain[i] * (0 - qd[i])
             torque.append(torque_i)
+
         # Clip torque về ctrl_ranges
         torque = torch.tensor(torque)
         torque = torch.clamp(torque, self.ctrl_min, self.ctrl_max)
 
         # Lưu lại action đã được lấy mẫu từ mu và sigma để điều khiển agent
-        action = torch.cat([sampled_pTarget.squeeze(), sampled_pGain.squeeze(),
-                            sampled_dTarget.squeeze(), sampled_dGain.squeeze()], dim=0)
+        action = torch.cat([sampled_pTarget.squeeze(), sampled_pGain.squeeze(), sampled_dGain.squeeze()], dim=0)
+
+        # print(f"MU_dTarget: {mu[:10]}\n"
+        #       f"range_dTarget: \n{np.array([[-0.26179939, 0.39269908],
+        #                                     [-0.39269908, 0.39269908],
+        #                                     [-0.87266463, 1.3962634],
+        #                                     [-2.86233997, -0.64577182],
+        #                                     [-2.44346095, -0.52359878],
+        #                                     [-0.39269908, 0.26179939],
+        #                                     [-0.39269908, 0.39269908],
+        #                                     [-0.87266463, 1.3962634],
+        #                                     [-2.86233997, -0.64577182],
+        #                                     [-2.44346095, -0.52359878]])}\n"
+        #       f"dCurrent: {q}"
+        #
+        #       f"MU_dGain: {mu[10:20]}\n"
+        #       f"MU_pGain: {mu[20:30]}\n"
+        #
+        #       f"SMG_dTarget: {sigma[:10]}\n"
+        #       f"SMG_dGain: {sigma[10:20]}\n"
+        #       f"SMG_pGain: {sigma[20:30]}\n"
+
+        # print(f"control: {torque}\n")
+              # f"range_control: \n{np.array([[-4.5, 4.5],
+              #                               [-4.5, 4.5],
+              #                               [-12.2, 12.2],
+              #                               [-12.2, 12.2],
+              #                               [-0.9, 0.9],
+              #                               [-4.5, 4.5],
+              #                               [-4.5, 4.5],
+              #                               [-12.2, 12.2],
+              #                               [-12.2, 12.2],
+              #                               [-0.9, 0.9]])}\n")
+        # print("===============================")
 
         return torque, action
 
@@ -510,6 +523,7 @@ class Agent:
         for i in range(self.atr_num):
             torque_i = sampled_pGain[0, 0, i] * (sampled_pTarget[0, 0, i] - q[i]) + \
                        sampled_dGain[0, 0, i] * (0 - qd[i])  # dTarget mặc định là 0
+
             torque.append(torque_i)
 
         # Clip torque về ctrl_ranges
@@ -520,9 +534,9 @@ class Agent:
 
     # Điều khiển agent
     def control_agent(self, control_signal):
-        print("===============BEGIN===============================")
-        print(f"Max torque: {control_signal.max()}, Min torque: {control_signal.min()}")
-        print("===============END===================================")
+        # print("===============BEGIN===============================")
+        # print(f"Max torque: {control_signal.max()}, Min torque: {control_signal.min()}")
+        # print("===============END===================================")
         for i, (torque, idx) in enumerate(zip(control_signal, self.atr_ctrl_map.values())):
             self.agt_data.ctrl[idx] = torque
 
@@ -543,15 +557,6 @@ class Agent:
         self.r = r
 
     # ========================= GET INPUT AND OUTPUT FOR MODEL =========================
-
-    def traj_input(self, x_des, y_des, time_clock):  # current_time: thời điểm thứ i trong clock
-        S_t = torch.cat(self.S_t.as_tensor_list(), dim=0)
-        xy_des = torch.tensor([x_des, y_des])
-        r = torch.tensor([self.r])
-        p = torch.tensor(self.p[time_clock])
-        inputs = torch.cat([S_t, xy_des, r, p], dim=0)
-        # Chuyển về mảng 3D mới vào LTSM được (batch_size, sequence_length, input_size)
-        return inputs.unsqueeze(0).unsqueeze(0)
 
     # Lấy đầu vào cho mạng bao gồm trạng thái S_t
     def get_state_t_input_model(self, x_des, y_des, time_clock):

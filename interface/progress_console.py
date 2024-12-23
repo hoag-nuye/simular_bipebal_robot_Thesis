@@ -7,6 +7,8 @@
 
 import time
 import sys
+import os
+from collections import deque
 
 
 def convert_second2time(times):
@@ -47,10 +49,13 @@ def colorize_bar(percent):
     red = int(255 * (1 - percent))  # Màu đỏ giảm dần
     green = int(255 * percent)  # Màu xanh tăng dần
     color_code = f"\033[38;2;{red};{green};0m"  # Mã ANSI màu
+
+    if int(percent) == 1:
+        color_code = "\033[0m"
     return color_code
 
 
-def progress_console(total_steps, current_steps, begin_time, ncols=80):
+def progress_console(total_steps, current_steps, begin_time, ncols=50):
     # Cập nhật phần trăm
     percent = current_steps / total_steps
     elapsed_time = time.time() - begin_time
@@ -61,16 +66,134 @@ def progress_console(total_steps, current_steps, begin_time, ncols=80):
     num_left = ncols - num_done
     #  ====================== CONSOLE BEGIN ========================
     reset = "\033[0m"  # Reset màu về mặc định
-    sys.stdout.write("\033[2J\033[H")  # xóa toàn bộ màn hình và đặt lai con trỏ
+    # sys.stdout.write("\033[2J\033[H")  # xóa toàn bộ màn hình và đặt lai con trỏ
+    os.system('cls')
     sys.stdout.write(f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n")
     sys.stdout.write(f"Samples: {current_steps}/{total_steps}\n")
-    sys.stdout.write(f"Passed: {elapsed_time}\n")
+    sys.stdout.write(f"Passed: {convert_second2time(elapsed_time)}\n")
     sys.stdout.write(f"Estimate: {convert_second2time(remaining_time)} \n")
     sys.stdout.write(f"Speed: {rate:} samples/second")
     sys.stdout.flush()
-    print()  # In một dòng trống sau khi hoàn thành
+    #
+
+
+def collect_progress_console(total_steps, current_steps, begin_time, ncols=50):
+    # Cập nhật phần trăm
+    percent = current_steps / total_steps
+    #  ====================== CONSOLE BEGIN ========================
+
+    elapsed_time = time.time() - begin_time
+    remaining_time = 0 if percent == 0 else elapsed_time / percent
+    rate = 0 if elapsed_time == 0 else int(current_steps / elapsed_time)
+    num_done = int(percent * ncols)
+    num_left = ncols - num_done
+
+    reset = "\033[0m"  # Reset màu về mặc định
+    sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+    sys.stdout.write("\033[5B")  # Di chuyển xuống 5 dòng
+    sys.stdout.write("\033[K")  # Xóa dòng hiện tại
+    for i in range(3):
+        sys.stdout.write("\033[1B")  # Di chuyển xuống 1 dòng
+        sys.stdout.write("\033[K")  # Xóa dòng hiện tại
+    sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+    sys.stdout.write("\033[5B")  # Di chuyển xuống 5 dòng
+    sys.stdout.write("\033[K")  # Xóa dòng hiện tạii
+    sys.stdout.write(
+        f"========= Collecting... =========\n"
+        f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n"
+        f"Samples: {current_steps}/{total_steps}\n"
+        f"Collect estimate: {convert_second2time(remaining_time)}\n"
+        f"Passed: {convert_second2time(elapsed_time)}\n"
+        f"Speed: {rate:} samples/second")
+    sys.stdout.flush()
     # ======================== END CONSOLE ========================
 
+
+def data_processing_console(total_steps, current_steps, begin_time, ncols=50):
+    # Cập nhật phần trăm
+    percent = current_steps / total_steps
+    #  ====================== CONSOLE BEGIN ========================
+
+    elapsed_time = time.time() - begin_time
+    remaining_time = 0 if percent == 0 else elapsed_time / percent
+    rate = 0 if elapsed_time == 0 else int(current_steps / elapsed_time)
+    num_done = int(percent * ncols)
+    num_left = ncols - num_done
+
+    reset = "\033[0m"  # Reset màu về mặc định
+    sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+    sys.stdout.write("\033[5B")  # Di chuyển xuống 5 dòng
+    sys.stdout.write("\033[K")  # Xóa dòng hiện tại
+    sys.stdout.write("\033[1B\033[K\033[H\033[5B")  # Di chuyển xuống 5 dòng
+
+    sys.stdout.write(
+        f"Collected=======================>\n"
+        f"========= Collecting... =========\n"
+        f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n"
+        f"Processing estimate: {convert_second2time(remaining_time)}\n"
+        f"Passed: {convert_second2time(elapsed_time)}\n")
+    sys.stdout.flush()
+    # ======================== END CONSOLE ========================
+
+
+def train_progress_console(total_steps, current_steps, begin_time,
+                           current_epoch, total_epoch,
+                           actor_loss, critic_loss, mean_reward,
+                           ncols=50):
+    max_len = 5
+    if not hasattr(train_progress_console, "history_line"):
+        train_progress_console.history_line = deque(maxlen=max_len)  # Khởi tạo thuộc tính nếu chưa có
+    else:
+        if current_steps == total_steps:
+            train_progress_console.history_line = deque(maxlen=max_len)
+
+    train_progress_console.history_line.append(
+                f"Iterator: {current_steps}, "
+                f"Actor Loss: {actor_loss}, "
+                f"Critic Loss: {critic_loss}, "
+                f"Reward Mean: {mean_reward}\n")
+
+    # Cập nhật phần trăm
+    percent = current_steps / total_steps
+    #  ====================== CONSOLE BEGIN ========================
+
+    elapsed_time = time.time() - begin_time
+    remaining_time = 0 if percent == 0 else elapsed_time / percent
+    rate = 0 if elapsed_time == 0 else int(current_steps / elapsed_time)
+    num_done = int(percent * ncols)
+    num_left = ncols - num_done
+
+    reset = "\033[0m"  # Reset màu về mặc định
+    sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+    sys.stdout.write("\033[5B")  # Di chuyển xuống 5 dòng
+    for i in range(3):
+        sys.stdout.write("\033[1B")  # Di chuyển xuống 1 dòng
+        sys.stdout.write("\033[K")  # Xóa dòng hiện tại
+    sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+    sys.stdout.write("\033[5B")  # Di chuyển xuống 5 dòng
+
+    sys.stdout.write(
+        f"Collected===>Data processed===>\n"
+        f"========= Training... =========\n"
+        f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n"
+        f"Epoch: {current_epoch}/{total_epoch}\n"
+        f"Iterations: {current_steps}/{total_steps}\n"
+        f"Collect estimate: {convert_second2time(remaining_time)}\n"
+        f"Passed: {convert_second2time(elapsed_time)}\n"
+        f"Speed: {rate:} iterations/second\n"
+        f"=========~ Param ~=========\n"
+    )
+    if int(percent * 100) % 10 == 0:
+        sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+        sys.stdout.write("\033[14B")  # Di chuyển xuống 5 dòng
+        for _ in range(max_len):
+            sys.stdout.write("\033[1B")  # Di chuyển xuống 1 dòng
+            sys.stdout.write("\033[K")  # Xóa dòng hiện tại
+        sys.stdout.write("\033[H")  # Đưa con trỏ về góc trên cùng bên trái
+        sys.stdout.write("\033[14B")  # Di chuyển xuống 5 dòng
+        for console_line in reversed(train_progress_console.history_line):
+            sys.stdout.write(console_line)
+        sys.stdout.flush()
 # days = 10
 # hours = 2
 # minutes = 2

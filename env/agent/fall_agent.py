@@ -25,6 +25,11 @@ class FallDetector:
         self.right_force_queue.append(right_fz)
         self.tilt_angle_queue.append(tilt_angle)
 
+    def reset_data(self):
+        self.left_force_queue = deque(maxlen=self.n)
+        self.right_force_queue = deque(maxlen=self.n)
+        self.tilt_angle_queue = deque(maxlen=self.n)
+
     def is_fallen(self):
         """
         Kiểm tra robot có bị ngã không.
@@ -32,20 +37,28 @@ class FallDetector:
         - 80% giá trị lực trong n gần nhất của cả 2 chân nhỏ hơn ngưỡng lực tối thiểu.
         - 80% giá trị góc nghiêng trong n gần nhất vượt quá ngưỡng góc nghiêng tối đa.
         """
-        min_force_count = int(0.8 * self.n)  # Số giá trị cần thiết để thỏa mãn điều kiện lực
-        max_tilt_count = int(0.8 * self.n)  # Số giá trị cần thiết để thỏa mãn điều kiện góc nghiêng
 
-        # Kiểm tra số lần lực nhỏ hơn ngưỡng ở mỗi chân
-        left_low_force_count = sum(abs(fz) < self.min_force_threshold for fz in self.left_force_queue)
-        right_low_force_count = sum(abs(fz) < self.min_force_threshold for fz in self.right_force_queue)
+        if len(self.tilt_angle_queue) < self.n:
+            max_tilt_count = 1  # Số giá trị cần thiết để thỏa mãn điều kiện góc nghiêng
+            tilt_exceed_count = sum(abs(angle) > self.max_tilt_threshold for angle in self.tilt_angle_queue)
+            # print("SÔ LẦN: ", tilt_exceed_count)
+            if tilt_exceed_count >= max_tilt_count:
+                # Kiểm tra số lần góc nghiêng vượt quá ngưỡng
+                return True
 
-        # Kiểm tra số lần góc nghiêng vượt quá ngưỡng
-        tilt_exceed_count = sum(abs(angle) > self.max_tilt_threshold for angle in self.tilt_angle_queue)
+        if len(self.tilt_angle_queue) == self.n:
+            min_force_count = int(0.8 * self.n)  # Số giá trị cần thiết để thỏa mãn điều kiện lực
 
-        # Robot được coi là ngã nếu cả hai điều kiện đều thỏa mãn
-        if (left_low_force_count >= min_force_count and
-            right_low_force_count >= min_force_count) or tilt_exceed_count >= max_tilt_count:
-            return True
+
+            # Kiểm tra số lần lực nhỏ hơn ngưỡng ở mỗi chân
+            left_low_force_count = sum(abs(fz) < self.min_force_threshold for fz in self.left_force_queue)
+            right_low_force_count = sum(abs(fz) < self.min_force_threshold for fz in self.right_force_queue)
+
+            # Robot được coi là ngã nếu cả hai điều kiện đều thỏa mãn
+            if (left_low_force_count >= min_force_count and
+                right_low_force_count >= min_force_count):
+                return True
+
         return False
 
 # ============== TEST THỬ =================

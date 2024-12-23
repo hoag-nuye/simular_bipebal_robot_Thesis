@@ -4,44 +4,54 @@
 #  Github:        hoag.nuye
 #  Created Date:  2024-12-07
 # === Information ================================================================
-
 import os
 import pickle
+import time
+
 import torch
 import numpy as np
-from collections import deque, defaultdict
+
+from interface.progress_console import data_processing_console
+
 
 # ========================== SUPERCLASS =================
 
 
 class Buffer:
-    def __init__(self, trajectory_size=32 * 300,
-                 max_size=50000):
-        self.trajectory_size = trajectory_size  # Kích thước của buffer trong mỗi lần thu thập
-        self.max_size = max_size  # Kích thước tối đa khi lưu trữ
+    def __init__(self):
         self.buffer = {
-            "states": deque(maxlen=trajectory_size),
-            "actions": deque(maxlen=trajectory_size),
-            "rewards": deque(maxlen=trajectory_size),
-            "log_probs": deque(maxlen=trajectory_size),
-            "sigma": deque(maxlen=trajectory_size),
-            "values": deque(maxlen=trajectory_size),
-            "trajectory_ids": deque(maxlen=trajectory_size),
-
+            "states": [],
+            "actions": [],
+            "rewards": [],
+            "log_probs": [],
+            "values": [],
+            "trajectory_ids": [],
         }
 
-    def add_sample(self, state, action, reward, log_prob, sigma, value, trajectory_id):
+    def add_sample(self, state, action, reward, log_prob, value, trajectory_id):
         """Thêm một mẫu vào buffer nhỏ (RAM)."""
         self.buffer["states"].append(state)
         self.buffer["actions"].append(action)
         self.buffer["rewards"].append(reward)
         self.buffer["log_probs"].append(log_prob)
-        self.buffer["sigma"].append(sigma)
         self.buffer["values"].append(value)
         self.buffer["trajectory_ids"].append(trajectory_id)
 
     def get_samples(self):
         return self.buffer
+
+
+# ========= REPLAY CÓ KÍCH THƯỚC NHỎ ĐỂ CHẠY ĐA LUỒNG =============
+class ReplayCache(Buffer):
+    def __init__(self):
+        # Gọi hàm __init__ của class Buffer để khởi tạo buffer
+        super().__init__()
+
+    # Set id cho trajectory
+    def sget_range_trajectory(self, begin_id=0):
+        self.buffer["trajectory_ids"] = [_id+begin_id for _id in self.buffer["trajectory_ids"]]
+        last_id = max(self.buffer["trajectory_ids"])
+        return last_id
 
 # ========================== RELAY BUFFER LỚN =======================
 
@@ -50,7 +60,7 @@ class ReplayBuffer(Buffer):
     def __init__(self,
                  trajectory_size=32 * 300,
                  max_size=50000,
-                 gamma=0.99, lam=0.95, alpha=0.6,
+                 gamma=0.99, lam=0.97, alpha=0.6,
                  file_path="replay_buffer"
                            ".pkl"):
         """
@@ -61,11 +71,18 @@ class ReplayBuffer(Buffer):
         self.gamma = gamma
         self.lam = lam
         self.alpha = alpha
-        self.mean_td_error = 0
+        # Theo dõi TD error qua các lần train
+        self.mean_td_error = None  # TD err hiện tại
+        self.history_length = 10
+        self.td_error_history = []
         self.file_path = file_path  # Đường dẫn lưu buffer vào ổ cứng
 
         # Gọi hàm __init__ của class Buffer để khởi tạo buffer
-        super().__init__(trajectory_size, max_size)
+        super().__init__()
+        # Khởi tạo thêm các giá trị cần lưu khác
+        self.buffer["returns"] = []
+        self.buffer["advantages"] = []
+        self.buffer["td_errors"] = []
 
         # Kiểm tra nếu file tồn tại và xóa nó
         if os.path.exists(file_path):
@@ -74,301 +91,484 @@ class ReplayBuffer(Buffer):
         else:
             print(f"File {file_path} không tồn tại.")
 
+    def reset(self):
+        """Reset buffer trong RAM."""
+        for key in self.buffer:
+            self.buffer[key] = []
+
+    def buffer_add_sample(self, state, action, reward, log_prob, value,
+                          returns, advantages, td_errors,
+                          trajectory_id):
+        """Thêm một mẫu vào buffer nhỏ (RAM).
+        :param returns:
+        :param advantages:
+        :param td_errors:
+        """
+        self.buffer["states"].append(state)
+        self.buffer["actions"].append(action)
+        self.buffer["rewards"].append(reward)
+        self.buffer["log_probs"].append(log_prob)
+        self.buffer["values"].append(value)
+        self.buffer["returns"].append(returns)
+        self.buffer["advantages"].append(advantages)
+        self.buffer["td_errors"].append(td_errors)
+        self.buffer["trajectory_ids"].append(trajectory_id)
+
     def append_from_buffer(self, buffer):
         """
-        Thêm toàn bộ dữ liệu từ buffer đầu vào vào buffer hiện tại.
+        Thêm toàn bộ dữ liệu từ buffer đầu vào vào buffer hiện tại và tính toán lại returns, advantages, TD errors.
 
         Args:
             buffer (dict): Buffer đầu vào phải có cấu trúc tương tự với buffer hiện tại.
         """
         # Kiểm tra xem buffer đầu vào có đầy đủ các khóa không
-        required_keys = ["states", "actions", "rewards", "log_probs", "sigma", "values", "trajectory_ids"]
+        required_keys = ["states", "actions", "rewards", "log_probs", "values", "trajectory_ids"]
         for key in required_keys:
             if key not in buffer:
                 raise ValueError(f"Buffer đầu vào thiếu khóa: {key}")
 
+        # Tính toán returns, advantages, và TD errors cho buffer đầu vào
+        returns, advantages = self.compute_returns_and_advantages(buffer)
+        td_errors = self.update_td_errors(buffer)
+
         # Duyệt qua từng mẫu trong buffer đầu vào và thêm vào buffer hiện tại
         for i in range(len(buffer["states"])):  # Giả định mọi danh sách đều có cùng độ dài
-            self.add_sample(
-                state=buffer["states"][i],
-                action=buffer["actions"][i],
-                reward=buffer["rewards"][i],
-                log_prob=buffer["log_probs"][i],
-                sigma=buffer["sigma"][i],
-                value=buffer["values"][i],
-                trajectory_id=buffer["trajectory_ids"][i],
-            )
+            self.buffer_add_sample(state=buffer["states"][i],
+                                   action=buffer["actions"][i],
+                                   reward=buffer["rewards"][i],
+                                   log_prob=buffer["log_probs"][i],
+                                   value=buffer["values"][i],
+                                   returns=returns[i],
+                                   advantages=advantages[i],
+                                   td_errors=td_errors[i],
+                                   trajectory_id=buffer["trajectory_ids"][i])
 
-    def update_td_errors(self):
-        """Cập nhật TD-error trong buffer nhỏ."""
+    # =========================== TÍNH At và Gt ========================
+    def compute_returns_and_advantages(self, buffer):
+        """Tính toán returns và advantages cho buffer đầu vào theo GAE (\u03bb=1)."""
+        T = len(buffer["rewards"])
+        returns = [0] * T
+        advantages = [0] * T
+
+        next_value = 0  # Giá trị V(s_T) (ở ngoài trajectory)
+        next_advantage = 0
+
+        for t in reversed(range(T)):
+            # Kiểm tra ngắt trajectory
+            if t == T - 1 or (buffer["trajectory_ids"][t] != buffer["trajectory_ids"][t + 1]):
+                next_value = 0  # Reset giá trị V(s) khi ngắt trajectory
+                next_advantage = 0
+
+            delta = buffer["rewards"][t] + self.gamma * next_value - buffer["values"][t]
+            advantages[t] = delta + self.gamma * self.lam * next_advantage
+            returns[t] = advantages[t] + buffer["values"][t]
+
+            next_value = buffer["values"][t]
+            next_advantage = advantages[t]
+        return returns, advantages
+
+    #  =============== Tính toán TD errors =====================
+    def update_td_errors(self, buffer):
+        """Tính toán TD-error cho buffer đầu vào."""
         td_errors = []
-        for t in range(len(self.buffer["rewards"])):
-            reward = self.buffer["rewards"][t]
-            value = self.buffer["values"][t]
-            next_value = self.buffer["values"][t + 1] if t + 1 < len(self.buffer["rewards"]) else 0
-            td_error = abs(reward + self.gamma * next_value - value)
+        for t in range(len(buffer["rewards"])):
+            reward = buffer["rewards"][t]
+            value = buffer["values"][t]
+            next_value = buffer["values"][t + 1] if t + 1 < len(buffer["rewards"]) else 0
+            td_error = reward + self.gamma * next_value - value
             td_errors.append(td_error)
 
-        self.buffer["td_errors"] = deque(td_errors, maxlen=self.trajectory_size)
-        # print(np.array(self.buffer["td_errors"]).shape,
-        #       np.array(self.buffer["rewards"]).shape,
-        #       np.array(self.buffer["values"]).shape)
         self.mean_td_error = np.mean(td_errors)
+        self.td_error_history.append(self.mean_td_error)
+        # # --------- KIỂM TRA VIỆC TÍNH TD ERR -----------
+        # td_err = []
+        # r = []
+        # v = []
+        # for idx, t in enumerate(buffer["trajectory_ids"]):
+        #     if t == 0:
+        #         r.append(np.array(buffer["rewards"])[idx])
+        #         v.append(np.array(buffer["values"])[idx])
+        # print(f"td_er_calculator: {td_errors}")
+        # print(f"reward: {r}")
+        # print(f"values: {v}")
+        return td_errors
 
-    def compute_returns_and_advantages(self):
-        """Tính toán returns và advantages trong buffer nhỏ theo GAE (λ=1)."""
-        returns = deque(maxlen=self.trajectory_size)
-        advantages = deque(maxlen=self.trajectory_size)
-        T = len(self.buffer["rewards"])  # Số bước trong trajectory hiện tại
-
-        # Lấy giá trị Value cuối cùng
-        next_value = 0  # Giá trị V(s_T) (ở ngoài trajectory)
-
-        # Duyệt ngược qua trajectory
-        for t in reversed(range(T)):
-            # Nếu là bước cuối cùng của một trajectory khác (trajectory IDs khác nhau):
-            if t == T - 1 or self.buffer["trajectory_ids"][t] != self.buffer["trajectory_ids"][t + 1]:
-                next_value = 0  # Không có giá trị tiếp theo
-
-            # Tính delta_t
-            delta = self.buffer["rewards"][t] + self.gamma * next_value - self.buffer["values"][t]
-
-            # Tính advantage dựa trên công thức GAE
-            advantage = delta + self.gamma * self.lam * (advantages[0] if advantages else 0)
-            advantages.appendleft(advantage)
-
-            # Tính return G_t
-            G = advantage + self.buffer["values"][t]
-            returns.appendleft(G)
-
-            # Cập nhật giá trị cho bước tiếp theo
-            next_value = self.buffer["values"][t]
-
-        # Ghi kết quả vào buffer
-        self.buffer["returns"] = returns
-        self.buffer["advantages"] = advantages
-
-    def save_to_pkl(self):
-        """Lưu buffer vào file .pkl, xóa mẫu cũ nhất nếu vượt quá max_size."""
-        temp_file_path = self.file_path + ".tmp"
-        current_buffer_size = len(self.buffer["states"])  # Số mẫu trong RAM
-
-        if os.path.exists(self.file_path):
-            print(f"File {self.file_path} tồn tại.")
-
-        # Ghi dữ liệu mới vào file tạm
-        with open(temp_file_path, "wb") as temp_file:
-            samples_written = 0
-            try:
-                # Đọc file gốc
-                with open(self.file_path, "rb") as original_file:
-                    while True:
-                        try:
-                            # Load một phần dữ liệu từ file gốc
-                            data = pickle.load(original_file)
-                            # Xóa phần tử cũ nếu vượt quá max_size
-                            for key in data:
-                                while len(data[key]) > 0 and samples_written + len(
-                                        data[key]) > self.max_size - current_buffer_size:
-                                    data[key].popleft()
-                            # Ghi phần dữ liệu còn lại vào file tạm
-                            pickle.dump(data, temp_file)
-                            samples_written += len(data["states"])
-                        except EOFError:
-                            break
-            except FileNotFoundError:
-                print("File gốc không tồn tại, tạo file mới.")
-
-            # Ghi buffer nhỏ (trong RAM) vào file tạm
-            pickle.dump(self.buffer, temp_file)
-
-        # Thay thế file gốc bằng file tạm
-        os.replace(temp_file_path, self.file_path)
-
-        # # Kiểm tra xem có thêm được hay không
-        # try:
-        #     with open(self.file_path, "rb") as f:
-        #         while True:
-        #             try:
-        #                 data = pickle.load(f)
-        #                 print(len(data["states"]))
-        #             except EOFError:
-        #                 break
-        # except FileNotFoundError:
-        #     print("File not found, starting with an empty buffer.")
-
-    def load_from_pkl(self):
-        """Tải toàn bộ dữ liệu từ file .pkl."""
-        buffer_large = {
-            "states": deque(maxlen=self.max_size),
-            "actions": deque(maxlen=self.max_size),
-            "rewards": deque(maxlen=self.max_size),
-            "log_probs": deque(maxlen=self.max_size),
-            "sigma": deque(maxlen=self.max_size),
-            "returns": deque(maxlen=self.max_size),
-            "advantages": deque(maxlen=self.max_size),
-            "trajectory_ids": deque(maxlen=self.max_size),
-            "td_errors": deque(maxlen=self.max_size),
-        }
-        try:
-            with open(self.file_path, "rb") as f:
-                while True:
-                    try:
-                        data = pickle.load(f)
-                        for key in buffer_large:
-                            buffer_large[key].extend(data[key])
-                    except EOFError:
-                        break
-        except FileNotFoundError:
-            print("File not found, starting with an empty buffer.")
-        return buffer_large
-
-    def detect_overfitting_or_underfitting(self, threshold=0.05):
+    # == kiểm tra over-under fitting--
+    def detect_overfitting_or_underfitting(self):
         """
-        Phát hiện overfitting hoặc underfitting dựa trên TD-error trung bình.
-        - Overfitting: TD-error giảm đáng kể (giá trị rất thấp).
-        - Underfitting: TD-error tăng đều hoặc không ổn định.
+        Phát hiện overfitting hoặc underfitting dựa trên TD-error trung bình và lịch sử.
+        - Overfitting: TD-error giảm mạnh và ổn định (giá trị rất thấp so với lịch sử).
+        - Underfitting: TD-error tăng đều hoặc không giảm trong lịch sử.
         """
-        if self.mean_td_error < threshold:
-            return "overfitting"
-        elif self.mean_td_error > 2 * threshold:
-            return "underfitting"
+        # So sánh TD-error hiện tại với lịch sử
+        if len(self.td_error_history) > 1:
+            mean_error = np.mean(self.td_error_history)
+            std_error = np.std(self.td_error_history)
+            normalized_error = (self.mean_td_error - mean_error) / (std_error + 1e-6)
+
+            # print(normalized_error)
+
+            if normalized_error < -2:
+                return "overfitting"
+            elif normalized_error > 2:
+                return "underfitting"
+
         return "normal"
 
-    def sample_batch(self, batch_size=32):
+    # ====================== TẠO RA CÁC MINIBATCH ================
+
+    # ====================== LẤY DỮ LIỆU CHO TRAINING ============
+    # SỬ DỤNG CHO NHỮNG THUẬT TOÁN ON-POLICY (HUẤN LUYỆN TỪ STATE HIỆN TẠI)
+    def sample_batch(self, batch_size=32,):
+        buffer = self.buffer
+        mini_batch_dict = []
+
+        # Tạo các nhóm tương ứng cho trajectory_ids với chỉ mục
+        trajectory_ids = buffer["trajectory_ids"]
+
+        # Lấy các giá trị duy nhất từ trajectory_ids và random hóa
+        unique_trajectories = np.unique(trajectory_ids)
+        # print(unique_trajectories)
+        if batch_size > len(unique_trajectories):
+            raise ValueError(f"Batch size ({batch_size}) lớn hơn số trajectory khả dụng ({len(unique_trajectories)}).")
+
+        # Xáo trộn các giá trị duy nhất
+        # np.random.shuffle(unique_trajectories)
+
+        # Tạo danh sách chứa các nhóm với mỗi nhóm có len_batch giá trị duy nhất của buffer
+        grouped_trajectories = [unique_trajectories[i:i + batch_size].tolist() for i in
+                                range(0, len(unique_trajectories), batch_size)]
+        # print(grouped_trajectories)
+        # Lấy các chỉ mục tương ứng được chia theo grouped_trajectories
+        batches_indices = []
+        grouped_trajectories_size = len(grouped_trajectories)
+        start_time = time.time()
+        for idx, group in enumerate(grouped_trajectories):
+            data_processing_console(total_steps=grouped_trajectories_size,
+                                    current_steps=idx + 1,
+                                    begin_time=start_time)
+            group_indices = np.where(np.isin(trajectory_ids, group))[0]  # Chỉ mục tương ứng với group
+            batches_indices.append(group_indices)
+
+        # Lấy các giá trị trong buffer theo các chỉ mục đã chọn
+        batches_indices_size = len(batches_indices)
+        start_time = time.time()
+        for idx, batch_indices in enumerate(batches_indices):
+            data_processing_console(total_steps=batches_indices_size,
+                                    current_steps=idx + 1,
+                                    begin_time=start_time)
+
+            # Tạo batch_dict trực tiếp bằng cách truy xuất mảng NumPy
+            batch_dict = {key: np.array(buffer[key])[batch_indices] for key in buffer}
+            mini_batch_dict.append(batch_dict)
+
+        # for idx, batch_indices in enumerate(batches_indices):
+        #     data_processing_console(total_steps=batches_indices_size,
+        #                             current_steps=idx + 1,
+        #                             begin_time=start_time)
+        #     batch_dict = {key: np.array([]) for key in buffer.keys()}
+        #     for key in buffer.keys():
+        #         batch_dict[key] = np.array(buffer[key])[batch_indices]
+        #     mini_batch_dict.append(batch_dict)
+
+        # ===== TẠO ĐẦU VÀO CHO VIỆC HUẤN LUYỆN THEO CÁC BATCH ĐÃ CHIA ==============
         """
-        Sampling batch dựa trên trạng thái overfitting hoặc underfitting, từ buffer lớn được tải từ ổ cứng.
+        ĐẦU RA LÀ CÁC BATCH CÓ CHỨA DỮ LIỆU CỦA CÁC
+        TENSOR CÓ SHAPE LÀ : [batch_size, num_samples, feature_size]
         """
-        # Phát hiện trạng thái huấn luyện
-        status = self.detect_overfitting_or_underfitting()
+        mini_batch = []
+        len_mini_batch_dict = len(mini_batch_dict)
+        start_time = time.time()
+        for idx, _batch_dict in enumerate(mini_batch_dict):
+            data_processing_console(total_steps=len_mini_batch_dict,
+                                    current_steps=idx+1,
+                                    begin_time=start_time)
+            # Khởi tạo dictionary chứa các batch đã được chia
+            batch = {}
+            # Khởi tạo giá trị lưu độ dài thực tế của từng traj trong batch
+            lengths_traj = None
+            # Duyệt qua tất cả các keys và chuyển đổi dữ liệu thành tensor
+            trajectory_ids = _batch_dict["trajectory_ids"]  # Dữ liệu trajectory_ids
+            # print(len(np.unique(trajectory_ids)))
+            # print(np.unique(trajectory_ids))
+            for key in _batch_dict.keys():
+                if key != "trajectory_ids":
+                    unique_trajectories = np.unique(trajectory_ids)
+                    # Lấy liệu cho key hiện tại
+                    data = _batch_dict[key]
+                    # if key == "rewards":
+                    #     for idx, d in enumerate(data):
+                    #         if _batch_dict["trajectory_ids"][idx] == _batch_dict["trajectory_ids"][1]:
+                    #             print(data[idx])
+                    # Tạo một mảng chứa mask cho mỗi trajectory_id
+                    mask_list = [trajectory_ids == trajectory_id for trajectory_id in unique_trajectories]
 
-        # Tải dữ liệu từ ổ cứng (buffer lớn)
-        buffer_large = self.load_from_pkl()
+                    # Dùng broadcasting và slicing để nhóm dữ liệu theo trajectory_id
+                    grouped_data = [data[mask] for mask in mask_list]
 
-        # Tính danh sách các trajectory id duy nhất
-        unique_trajectory_ids = np.unique(buffer_large["trajectory_ids"])
-        num_trajectories = len(unique_trajectory_ids)
+                    # Tìm số mẫu lớn nhất trong mỗi nhóm để padding
+                    max_samples = max(len(group) for group in grouped_data)
 
-        # Đảm bảo batch size không vượt quá số trajectory có sẵn
-        if batch_size > num_trajectories:
-            raise ValueError(f"Batch size ({batch_size}) lớn hơn số trajectory khả dụng ({num_trajectories}).")
+                    # lengths_traj: Danh sách độ dài thực của từng trajectory trong batch
+                    lengths_traj = torch.tensor([len(group) for group in grouped_data])
 
-        # Chọn các trajectory id để tạo batch
-        if status in ["overfitting", "underfitting"]:
-            # Nếu overfitting hoặc underfitting:
-            # 90% trajectory lấy từ dữ liệu mới nhất
-            new_trajectory_ids = unique_trajectory_ids[-batch_size * 9 // 10:]
+                    # ĐƯA VỀ ARR 1 SANG VỀ 2 CHIỀU ĐỂ PADDING
+                    for i, group in enumerate(grouped_data):
+                        if len(group.shape) != 2:
+                            grouped_data[i] = group.reshape(-1, 1)  # Gán lại group vào grouped_data
 
-            if not (len(new_trajectory_ids) == batch_size):
-                # 10% trajectory lấy ngẫu nhiên theo trọng số ưu tiên
-                td_errors = np.array(buffer_large["td_errors"])
-                priorities = td_errors ** self.alpha  # priorities mũ lên để thể hiện sự quan trọng (ưu tiên)
-                probabilities = priorities / priorities.sum()  # Normalize probabilities
+                    # Padding dữ liệu sao cho tất cả các nhóm đều có số lượng mẫu như nhau
+                    # (0, max_samples - len(group)), (0, 0) => mảng được padding phải là mảng 2 chiều
+                    padded_data = np.array(
+                        [np.pad(group,
+                                ((0, max_samples - len(group)), (0, 0)),
+                                mode='constant') for group in grouped_data])
 
-                # Tính probabilities cho từng trajectory_id
-                trajectory_probabilities = defaultdict(float)  # Dictionary để lưu probabilities theo trajectory_id
+                    # Chuyển thành tensor
+                    batch[key] = torch.tensor(padded_data)
+                    batch["lengths_traj"] = lengths_traj
+            mini_batch.append(batch)
+        return mini_batch
 
-                # Lặp qua tất cả các sample và gộp probabilities theo trajectory_id
-                for prob, traj_id in zip(probabilities, buffer_large["trajectory_ids"]):
-                    trajectory_probabilities[traj_id] += prob
-
-                # Chuyển các giá trị trong dict thành mảng NumPy
-                trajectory_probabilities_array = np.array(list(trajectory_probabilities.values()))
-
-                trajectory_probabilities_array = trajectory_probabilities_array[:-len(new_trajectory_ids)]
-
-                # Nếu tổng không chính xác bằng 1, chuẩn hóa lại
-                if not np.isclose(trajectory_probabilities_array.sum(), 1.0):
-                    trajectory_probabilities_array /= trajectory_probabilities_array.sum()
-
-                old_trajectory_ids = np.random.choice(
-                    unique_trajectory_ids[:-len(new_trajectory_ids)],  # Trừ các trajectory mới nhất
-                    size=batch_size * 1 // 10,
-                    p=trajectory_probabilities_array,
-                    replace=False
-                )
-                selected_trajectory_ids = np.concatenate([new_trajectory_ids, old_trajectory_ids])
-            else:
-                selected_trajectory_ids = unique_trajectory_ids[-batch_size:]
-        else:
-            # Nếu trạng thái bình thường:
-            # 100% trajectory lấy từ dữ liệu mới nhất
-            selected_trajectory_ids = unique_trajectory_ids[-batch_size:]
-
-        # Lọc các sample dựa trên trajectory id được chọn
-        selected_indices = [
-            i for i, trajectory_id in enumerate(buffer_large["trajectory_ids"])
-            if trajectory_id in selected_trajectory_ids
-        ]
-
-        # Shuffle để đảm bảo tính ngẫu nhiên
-        np.random.shuffle(selected_indices)
-
-        # Trả về batch dữ liệu
-        batch_dict = {
-            "states": np.array([buffer_large["states"][i] for i in selected_indices]),  # 2D
-            "actions": np.array([buffer_large["actions"][i] for i in selected_indices]),  # 2D
-            "log_probs": np.array([buffer_large["log_probs"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
-            "sigma": np.array([buffer_large["sigma"][i] for i in selected_indices]),  # 2D
-            "rewards": np.array([buffer_large["rewards"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
-            "returns": np.array([buffer_large["returns"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
-            "advantages": np.array([buffer_large["advantages"][i] for i in selected_indices]).reshape(-1, 1),  # 1D -> 2D
-            "trajectory_ids": np.array([buffer_large["trajectory_ids"][i] for i in selected_indices]),
-        }
-
-
-        # ================== TẠO ĐẦU VÀO CHO VIỆC HUẤN LUYỆN ===============
-        """
-        ĐẦU RA LÀ CÁC TENSOR CÓ SHAPE LÀ : [batchsize, num_samples, feature]
-        """
-        # 1. Lấy danh sách các giá trị duy nhất trong "trajectory_ids"
-        unique_trajectory_ids = np.unique(buffer_large["trajectory_ids"])
-
-        # 2. Khởi tạo dictionary kết quả
-        result = {}
-
-        # Duyệt qua tất cả các keys và chuyển đổi dữ liệu thành tensor
-        trajectory_ids = batch_dict["trajectory_ids"]  # Dữ liệu trajectory_ids
-        for key in batch_dict.keys():
-            if key != "trajectory_ids":
-                data = batch_dict[key]  # Dữ liệu cho key hiện tại
-
-                # Tạo một mảng chứa mask cho mỗi trajectory_id
-                mask_list = [trajectory_ids == trajectory_id for trajectory_id in unique_trajectory_ids]
-
-                # Dùng broadcasting và slicing để nhóm dữ liệu theo trajectory_id
-                grouped_data = [data[mask] for mask in mask_list]
-
-                # Tìm số mẫu lớn nhất trong mỗi nhóm để padding
-                max_samples = max(len(group) for group in grouped_data)
-
-                # # Kiểm tra kích thước của từng group trước khi padding
-                # print(f"Max samples: {max_samples}")
-                # print(f"Grouped data shapes before padding: {[group.shape for group in grouped_data]}")
-
-                # Padding dữ liệu sao cho tất cả các nhóm đều có số lượng mẫu như nhau
-                padded_data = np.array(
-                    [np.pad(group, ((0, max_samples - len(group)), (0, 0)), mode='constant') for group in grouped_data])
-
-                # Chuyển thành tensor
-                result[key] = torch.tensor(padded_data)
-
-        return result
-
-    def reset(self):
-        """Reset buffer nhỏ trong RAM."""
-        for key in self.buffer:
-            if key == "best_reward":
-                continue
-            self.buffer[key] = deque(maxlen=self.trajectory_size)
-
-
-# ========= REPLAY CÓ KÍCH THƯỚC NHỎ ĐỂ CHẠY ĐA LUỒNG =============
-class ReplayCache(Buffer):
-    def __init__(self, trajectory_size=4 * 300, max_size=6.250):
-        # Gọi hàm __init__ của class Buffer để khởi tạo buffer
-        super().__init__(trajectory_size, max_size)
-
-
-
-
+    # SỬ DỤNG CHO NHỮNG THUẬT TOÁN OFF-POLICY (HUẤN LUYỆN TỪ CÁC DỮ LIỆU KHÁC)
+    # def sample_batch_use_buffer(self, batch_size=32):
+    #     """
+    #     Sampling batch dựa trên trạng thái overfitting hoặc underfitting, từ buffer lớn được tải từ ổ cứng.
+    #     """
+    #     batch_result = {}  # lưu kết quả
+    #     lengths_traj = None  # lưu kết quả vị trí các sample và sampling
+    #     selected_trajectory_ids = []
+    #     # Tải dữ liệu từ ổ cứng (buffer lớn)
+    #     buffer_large = self.load_from_pkl()
+    #
+    #     # 1. Lấy danh sách các giá trị duy nhất trong "trajectory_ids"
+    #     unique_trajectory_ids = np.unique(buffer_large["trajectory_ids"])
+    #     num_trajectories = len(unique_trajectory_ids)
+    #     # Đảm bảo batch size không vượt quá số trajectory có sẵn
+    #     if batch_size > num_trajectories:
+    #         raise ValueError(f"Batch size ({batch_size}) lớn hơn số trajectory khả dụng ({num_trajectories}).")
+    #
+    #     # 2. Chuyển dữ liệu về array
+    #     batch_dict = {
+    #         "states": np.array(buffer_large["states"]),  # 2D
+    #         "actions": np.array(buffer_large["actions"]),  # 2D
+    #         "log_probs": np.array(buffer_large["log_probs"]).reshape(-1, 1),  # 1D -> 2D
+    #         "rewards": np.array(buffer_large["rewards"]).reshape(-1, 1),  # 1D -> 2D
+    #         "returns": np.array(buffer_large["returns"]).reshape(-1, 1),  # 1D -> 2D
+    #         "advantages": np.array(buffer_large["advantages"]).reshape(-1, 1),  # 1D -> 2D
+    #         "td_errors": np.array(buffer_large["td_errors"]).reshape(-1, 1),  # 1D -> 2D
+    #         # 1D -> 2D
+    #         "trajectory_ids": np.array(buffer_large["trajectory_ids"])}
+    #
+    #     # print(batch_dict["trajectory_ids"].shape, batch_dict["states"].shape, np.array(buffer_large["states"]).shape)
+    #
+    #     # 3. Khởi tạo dictionary kết quả
+    #     batch_large = {}
+    #     # Duyệt qua tất cả các keys và chuyển đổi dữ liệu thành tensor
+    #     trajectory_ids = batch_dict["trajectory_ids"]  # Dữ liệu trajectory_ids
+    #     for key in batch_dict.keys():
+    #         if key != "trajectory_ids":
+    #
+    #             data = np.array(batch_dict[key])  # Chuyển dữ liệu sang mảng NumPy nếu cần  # Dữ liệu cho key hiện tại
+    #             # print(key, batch_dict[key].shape)
+    #             # Tạo một mảng chứa mask cho mỗi trajectory_id
+    #             mask_list = np.array([trajectory_ids == trajectory_id for trajectory_id in unique_trajectory_ids])
+    #             # print(data.shape, mask_list.shape)
+    #
+    #             grouped_data = [data[mask] for mask in mask_list]
+    #
+    #             # Tìm số mẫu lớn nhất trong mỗi nhóm để padding
+    #             max_samples = max(len(group) for group in grouped_data)
+    #
+    #             # # Kiểm tra kích thước của từng group trước khi padding
+    #             # print(f"Max samples: {max_samples}")
+    #             # print(f"Grouped data shapes before padding: {[group.shape for group in grouped_data]}")
+    #
+    #             # Padding dữ liệu sao cho tất cả các nhóm đều có số lượng mẫu như nhau
+    #             padded_data = np.array(
+    #                 [np.pad(group, ((0, max_samples - len(group)), (0, 0)), mode='constant', constant_values=-1) for
+    #                  group in grouped_data])
+    #
+    #             # Chuyển thành tensor
+    #             batch_large[key] = torch.tensor(padded_data)
+    #
+    #     # print(batch_large["states"].shape)
+    #     # print("TENSOR:", result["states"][-1, 0, :])
+    #     # print("DEQUE:", [buffer_large["states"][i] for i in range(len(buffer_large["trajectory_ids"]))
+    #     #                  if buffer_large["trajectory_ids"][i] == unique_trajectory_ids[-1]])
+    #     # ============================================================
+    #     # =================== LỌC DỮ LIỆU ============================
+    #     # =============================================================
+    #
+    #     # Phát hiện trạng thái huấn luyện
+    #     status = self.detect_overfitting_or_underfitting()
+    #
+    #     # ========== LẤY DỮ LIỆU KHI GẶP PHẢI OVER-UNDER FIT================
+    #     if status in ["overfitting", "underfitting"]:
+    #         # print(status)
+    #         # 90% trajectory lấy từ dữ liệu mới nhất
+    #         percent = 0.9
+    #         batch_main_size = int(batch_size * percent)
+    #         bath_rest_size = int(batch_size - batch_main_size)  # Số lượng cần lấy
+    #
+    #         main_trajectory_ids = unique_trajectory_ids[-batch_main_size:]
+    #         rest_trajectory_ids = unique_trajectory_ids[:-batch_main_size]
+    #
+    #         # print(main_trajectory_ids, rest_trajectory_ids)
+    #
+    #         if batch_main_size != batch_size:
+    #             batch_main = {key: tensor[torch.tensor(main_trajectory_ids)] for key, tensor in batch_large.items()}
+    #             rest_trajectory = {key: tensor[torch.tensor(rest_trajectory_ids)] for key, tensor in
+    #                                batch_large.items()}  # dữ liệu được phép lấy
+    #             # Bước 1: Truy xuất rewards và tính priorities
+    #             td_errors = rest_trajectory["td_errors"]  # ex: Shape: [32, 300, 1]
+    #             mean_td_errors = td_errors.mean(dim=1, keepdim=False)  # Shape: [32, 1]
+    #             # TD Error (𝛿) có thể dương hoặc âm
+    #             # nhưng chỉ cần quan tâm đến độ lớn của sai lệch (absolute difference), không cần quan tâm đến dấu.
+    #             priorities = torch.abs(mean_td_errors).squeeze(
+    #                 -1) ** self.alpha  # Shape: [32] # priorities mũ lên để thể hiện sự quan trọng (ưu tiên)
+    #             # Bước 2: Normalize probabilities
+    #             probabilities = priorities / torch.sum(priorities)
+    #             # Đảm bảo tổng xác suất = 1 bằng cách chuẩn hóa lại nếu cần
+    #             if not np.isclose(probabilities.sum().item(), 1.0, atol=1e-6):
+    #                 probabilities = probabilities / probabilities.sum()
+    #             # Bước 3: Chọn num_choice chỉ mục theo xác suất ưu tiên
+    #             selected_indices = np.random.choice(
+    #                 rest_trajectory_ids, size=bath_rest_size, replace=False, p=probabilities)
+    #             # Bước 4: Trích xuất tensor tương ứng từ result
+    #             batch_rest = {key: value[selected_indices] for key, value in rest_trajectory.items()}
+    #             # Bước 5: Gộp batch_main và batch_rest
+    #             selected_trajectory_ids = np.concatenate((selected_indices, main_trajectory_ids))
+    #             batch_result = {key: torch.cat([batch_main[key], batch_rest[key]], dim=0)
+    #                             for key in batch_large.keys()}
+    #
+    #         else:
+    #             # Tạo dictionary mới chứa các tensor đã lọc
+    #             selected_trajectory_ids = main_trajectory_ids
+    #             batch_result = {key: tensor[torch.tensor(main_trajectory_ids)] for key, tensor in batch_large.items()}
+    #     # ========== LẤY DỮ LIỆU NHƯ BÌNH THƯỜNG================
+    #     else:
+    #         # print(status)
+    #         # Nếu overfitting hoặc underfitting:
+    #         # 90% trajectory lấy từ dữ liệu mới nhất
+    #         percent = 0.5
+    #         batch_main_size = int(batch_size * percent)
+    #         bath_rest_size = int(batch_size - batch_main_size)  # Số lượng cần lấy
+    #
+    #         main_trajectory_ids = unique_trajectory_ids[-batch_main_size:]
+    #         rest_trajectory_ids = unique_trajectory_ids[:-bath_rest_size]
+    #
+    #         if batch_main_size != batch_size:
+    #             batch_main = {key: tensor[torch.tensor(main_trajectory_ids)] for key, tensor in batch_large.items()}
+    #             rest_trajectory = {key: tensor[torch.tensor(rest_trajectory_ids)] for key, tensor in
+    #                                batch_large.items()}  # dữ liệu được phép lấy
+    #             # Bước 1: Truy xuất reward và tính priorities
+    #             rewards = rest_trajectory["rewards"]  # Shape: [32, 300, 1]
+    #             mean_rewards = rewards.mean(dim=1, keepdim=False)  # Shape: [32, 1]
+    #             # đảm bảo phần thưởng trung bình dương nhưng vẫn xếp theo thứ tự
+    #             min_reward = mean_rewards.min().item()  # Giá trị phần thưởng nhỏ nhất
+    #             epsilon = 1e-6  # Giá trị nhỏ để tránh 0
+    #             adjusted_rewards = mean_rewards - min_reward + 1e-6  # Đảm bảo không có giá trị âm
+    #             priorities = adjusted_rewards.squeeze(-1) ** 2  # Shape: [32]
+    #             # Bước 2: Normalize probabilities
+    #             probabilities = priorities / torch.sum(priorities)
+    #             # Đảm bảo tổng xác suất = 1 bằng cách chuẩn hóa lại nếu cần
+    #             if not np.isclose(probabilities.sum().item(), 1.0, atol=1e-6):
+    #                 probabilities = probabilities / probabilities.sum()
+    #             # Bước 3: Chọn num_choice chỉ mục theo xác suất ưu tiên
+    #             selected_indices = np.random.choice(
+    #                 rest_trajectory_ids, size=bath_rest_size, replace=False, p=probabilities)
+    #             # Bước 4: Trích xuất tensor tương ứng từ result
+    #             batch_rest = {key: value[selected_indices] for key, value in rest_trajectory.items()}
+    #             # Bước 5: Gộp batch_main và batch_rest
+    #             selected_trajectory_ids = np.concatenate((selected_indices, main_trajectory_ids))
+    #             batch_result = {key: torch.cat([batch_main[key], batch_rest[key]], dim=0)
+    #                             for key in batch_large.keys()}
+    #         else:
+    #             # Tạo dictionary mới chứa các tensor đã lọc
+    #             selected_trajectory_ids = main_trajectory_ids
+    #             batch_result = {key: tensor[torch.tensor(main_trajectory_ids)] for key, tensor in batch_large.items()}
+    #
+    #     # ============================================================
+    #     # =================== XỬ LÝ LẠI PADDING ======================
+    #     # ============================================================
+    #     # --------------- TÌM LENGHT THẬT CỦA TRAJECTORY ------
+    #     # Tạo một mask để lọc lại dữ liệu dựa trên các trajectory_id trong batch_result
+    #     mask_list_result = [batch_dict["trajectory_ids"] == traj_id for traj_id in selected_trajectory_ids]
+    #
+    #     # Sử dụng mask để nhóm lại dữ liệu trong batch_dict (hoặc batch_large)
+    #     grouped_data_result = [batch_dict["states"][mask] for mask in
+    #                            mask_list_result]  # Có thể thay 'states' bằng key khác
+    #
+    #     # Tính lại độ dài thực sự của mỗi trajectory trong batch_result
+    #     lengths_traj = torch.tensor([len(group) for group in grouped_data_result])
+    #     # ---------- TÌM SIZE PADDING THẬT CỦA SAMPLE --------------
+    #     max_lengths_traj = torch.max(lengths_traj)
+    #     for key in batch_result.keys():
+    #         batch_result[key] = batch_result[key][:, :max_lengths_traj, :]
+    #     print(batch_result["states"].shape)
+    #     # print(lengths_traj)
+    #     return batch_result, lengths_traj
+    #
+    # # =================== LƯU TRỮ DỮ LIỆU =====================
+    # def save_to_pkl(self):
+    #     """Lưu buffer vào file .pkl, xóa mẫu cũ nhất nếu vượt quá max_size."""
+    #     temp_file_path = self.file_path + ".tmp"
+    #     current_buffer_size = len(self.buffer["states"])  # Số mẫu trong RAM
+    #
+    #     if os.path.exists(self.file_path):
+    #         print(f"File {self.file_path} tồn tại.")
+    #
+    #     # Ghi dữ liệu mới vào file tạm
+    #     with open(temp_file_path, "wb") as temp_file:
+    #         samples_written = 0
+    #         try:
+    #             # Đọc file gốc
+    #             with open(self.file_path, "rb") as original_file:
+    #                 while True:
+    #                     try:
+    #                         # Load một phần dữ liệu từ file gốc
+    #                         data = pickle.load(original_file)
+    #                         # Xóa phần tử cũ nếu vượt quá max_size
+    #                         for key in data:
+    #                             while len(data[key]) > 0 and samples_written + len(
+    #                                     data[key]) > self.max_size - current_buffer_size:
+    #                                 data[key].popleft()
+    #                         # Ghi phần dữ liệu còn lại vào file tạm
+    #                         pickle.dump(data, temp_file)
+    #                         samples_written += len(data["states"])
+    #                     except EOFError:
+    #                         break
+    #         except FileNotFoundError:
+    #             print("File gốc không tồn tại, tạo file mới.")
+    #
+    #         # Ghi buffer nhỏ (trong RAM) vào file tạm
+    #         pickle.dump(self.buffer, temp_file)
+    #
+    #     # Thay thế file gốc bằng file tạm
+    #     os.replace(temp_file_path, self.file_path)
+    #
+    # def load_from_pkl(self):
+    #     """Tải toàn bộ dữ liệu từ file .pkl."""
+    #     buffer_large = {
+    #         "states": [],
+    #         "actions": [],
+    #         "rewards": [],
+    #         "log_probs": [],
+    #         "returns": [],
+    #         "advantages": [],
+    #         "trajectory_ids": [],
+    #         "td_errors": [],
+    #     }
+    #     try:
+    #         with open(self.file_path, "rb") as f:
+    #             while True:
+    #                 try:
+    #                     data = pickle.load(f)
+    #                     for key in buffer_large:
+    #                         buffer_large[key].extend(data[key])
+    #                 except EOFError:
+    #                     break
+    #     except FileNotFoundError:
+    #         print("File not found, starting with an empty buffer.")
+    #     return buffer_large

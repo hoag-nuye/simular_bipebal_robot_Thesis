@@ -14,20 +14,43 @@ from dataclasses import dataclass
 # =================== Giá trị của trạng thái S_t trong xml =====================
 class StateFields(Enum):
     # <!-- Joint positions -->
-    joint_positions = ["left-shin-output",
-                       "left-tarsus-output",
+    joint_positions = ["left-hip-roll-output",
+                       "left-hip-yaw-output",
+                       "left-hip-pitch-output",
+                       "left-knee-output",
                        "left-foot-output",
+                       "left-shin-output",
+                       "left-tarsus-output",
+
+                       "right-hip-roll-output",
+                       "right-hip-yaw-output",
+                       "right-hip-pitch-output",
+                       "right-knee-output",
+                       "right-foot-output",
                        "right-shin-output",
                        "right-tarsus-output",
-                       "right-foot-output"]
+                       ]
 
     # <!-- Joint velocities -->
-    joint_velocities = ["left-shin-velocity",
-                        "left-tarsus-velocity",
+    joint_velocities = ["left-hip-roll-velocity",
+                        "left-hip-yaw-velocity",
+                        "left-hip-pitch-velocity",
+                        "left-knee-velocity",
                         "left-foot-velocity",
+                        "left-shin-velocity",
+                        "left-tarsus-velocity",
+
+                        "right-hip-roll-velocity",
+                        "right-hip-yaw-velocity",
+                        "right-hip-pitch-velocity",
+                        "right-knee-velocity",
+                        "right-foot-velocity",
                         "right-shin-velocity",
-                        "right-tarsus-velocity",
-                        "right-foot-velocity"]
+                        "right-tarsus-velocity"]
+
+    # <!-- Touch sensors -->
+    left_foot_touch = ["left-foot-touch"]
+    right_foot_touch = ["right-foot-touch"]
 
     # <!-- Force sensors -->
     left_foot_force = ["left-foot-force"]
@@ -44,89 +67,51 @@ class StateFields(Enum):
     pelvis_linear_acceleration = ["pelvis-linear-acceleration"]  # Gia tốc tuyến tính của xương chậu
 
 
+# ================== Giá trị của các khớp ==============
+class JointFields(Enum):
+    joint_positions = ["left-hip-roll",
+                       "left-hip-yaw",
+                       "left-hip-pitch",
+                       "left-knee",
+                       "left-foot",
+
+                       "right-hip-roll",
+                       "right-hip-yaw",
+                       "right-hip-pitch",
+                       "right-knee",
+                       "right-foot"]
+
+
 # =================== Giá trị của actuator trong xml =====================
+
+# ĐÂY LÀ CHỨA VỊ TRÍ CỦA CÁC KHỚP CÓ ACTUATOR ĐIỀU KHIỂN ()
 class ActuatorFields(Enum):
     # <!-- Actuator positions -->
-    actuator_positions = ["left-hip-roll-input",
-                          "left-hip-yaw-input",
-                          "left-hip-pitch-input",
-                          "left-knee-input",
-                          "left-foot-input",
+    actuator_positions = ["left-hip-roll-output",
+                          "left-hip-yaw-output",
+                          "left-hip-pitch-output",
+                          "left-knee-output",
+                          "left-foot-output",
 
-                          "right-hip-roll-input",
-                          "right-hip-yaw-input",
-                          "right-hip-pitch-input",
-                          "right-knee-input",
-                          "right-foot-input"]
+                          "right-hip-roll-output",
+                          "right-hip-yaw-output",
+                          "right-hip-pitch-output",
+                          "right-knee-output",
+                          "right-foot-output",
+                          ]
 
     # <!-- Actuator velocities -->
     actuator_velocities = ["left-hip-roll-velocity",
                            "left-hip-yaw-velocity",
                            "left-hip-pitch-velocity",
                            "left-knee-velocity",
-                           "left-foot-act-velocity",
+                           "left-foot-velocity",
 
                            "right-hip-roll-velocity",
                            "right-hip-yaw-velocity",
                            "right-hip-pitch-velocity",
                            "right-knee-velocity",
-                           "right-foot-act-velocity"
-                           ]
-
-
-# =================== Giá trị của sensor trong xml =====================
-class SensorFields(Enum):
-    # <!-- Actuator positions -->
-    LEFT_HIP_ROLL_INPUT = "left-hip-roll-input"  # Đầu vào điều khiển cho khớp lăn hông trái (lăn: roll)
-    LEFT_HIP_YAW_INPUT = "left-hip-yaw-input"  # Đầu vào điều khiển cho khớp xoay hông trái (xoay: yaw)
-    LEFT_HIP_PITCH_INPUT = "left-hip-pitch-input"  # Đầu vào điều khiển cho khớp gập hông trái (gập: pitch)
-    LEFT_KNEE_INPUT = "left-knee-input"  # Đầu vào điều khiển cho khớp gối trái
-    LEFT_FOOT_INPUT = "left-foot-input"  # Đầu vào điều khiển cho bàn chân trái
-
-    RIGHT_HIP_ROLL_INPUT = "right-hip-roll-input"  # Đầu vào điều khiển cho khớp lăn hông phải
-    RIGHT_HIP_YAW_INPUT = "right-hip-yaw-input"  # Đầu vào điều khiển cho khớp xoay hông phải
-    RIGHT_HIP_PITCH_INPUT = "right-hip-pitch-input"  # Đầu vào điều khiển cho khớp gập hông phải
-    RIGHT_KNEE_INPUT = "right-knee-input"  # Đầu vào điều khiển cho khớp gối phải
-    RIGHT_FOOT_INPUT = "right-foot-input"  # Đầu vào điều khiển cho bàn chân phải
-
-    # <!-- Actuator velocities -->
-    LEFT_HIP_ROLL_VELOCITY = "left-hip-roll-velocity"  # Vận tốc khớp lăn hông trái
-    LEFT_HIP_YAW_VELOCITY = "left-hip-yaw-velocity"  # Vận tốc khớp xoay hông trái
-    LEFT_HIP_PITCH_VELOCITY = "left-hip-pitch-velocity"  # Vận tốc khớp gập hông trái
-    LEFT_KNEE_VELOCITY = "left-knee-velocity"  # Vận tốc khớp gối trái
-    LEFT_FOOT_ACT_VELOCITY = "left-foot-act-velocity"  # Vận tốc khớp bàn chân trái
-
-    RIGHT_HIP_ROLL_VELOCITY = "right-hip-roll-velocity"  # Vận tốc khớp lăn hông phải
-    RIGHT_HIP_YAW_VELOCITY = "right-hip-yaw-velocity"  # Vận tốc khớp xoay hông phải
-    RIGHT_HIP_PITCH_VELOCITY = "right-hip-pitch-velocity"  # Vận tốc khớp gập hông phải
-    RIGHT_KNEE_VELOCITY = "right-knee-velocity"  # Vận tốc khớp gối phải
-    RIGHT_FOOT_ACT_VELOCITY = "right-foot-act-velocity"  # Vận tốc khớp bàn chân phải
-
-    # <!-- Joint positions -->
-    LEFT_SHIN_OUTPUT = "left-shin-output"  # Đầu ra từ cảm biến đo lường trạng thái của ống chân trái
-    LEFT_TARSUS_OUTPUT = "left-tarsus-output"  # Đầu ra từ cảm biến đo trạng thái của khớp cổ chân trái
-    LEFT_FOOT_OUTPUT = "left-foot-output"  # Đầu ra từ cảm biến đo lường trạng thái bàn chân trái
-    RIGHT_SHIN_OUTPUT = "right-shin-output"  # Đầu ra từ cảm biến đo trạng thái của ống chân phải
-    RIGHT_TARSUS_OUTPUT = "right-tarsus-output"  # Đầu ra từ cảm biến đo trạng thái của khớp cổ chân phải
-    RIGHT_FOOT_OUTPUT = "right-foot-output"  # Đầu ra từ cảm biến đo lường trạng thái bàn chân phải
-
-    # <!-- Joint velocities -->
-    LEFT_SHIN_VELOCITY = "left-shin-velocity"
-    LEFT_TARSUS_VELOCITY = "left-tarsus-velocity"
-    LEFT_FOOT_VELOCITY = "left-foot-velocity"
-    RIGHT_SHIN_VELOCITY = "right-shin-velocity"
-    RIGHT_TARSUS_VELOCITY = "right-tarsus-velocity"
-    RIGHT_FOOT_VELOCITY = "right-foot-velocity"
-
-    # <!-- Force sensors -->
-    LEFT_FOOT_FORCE = "left-foot-force"
-    RIGHT_FOOT_FORCE = "right-foot-force"
-
-    # <!-- Pelvis sensors -->
-    PELVIS_ORIENTATION = "pelvis-orientation"  # Đo lường hướng của xương chậu trong không gian
-    PELVIS_LINEAR_ACCELERATION = "pelvis-linear-acceleration"  # Gia tốc tuyến tính của xương chậu
-    PELVIS_VELOCITY = "pelvis-velocity"  # Vận tốc của xương chậu
-    PELVIS_ANGULAR_VELOCITY = "pelvis-angular-velocity"  # Vận tốc xoay của xương chậu
+                           "right-foot-velocity", ]
 
 
 @dataclass
@@ -135,6 +120,8 @@ class AgentState:
     isTerminalState: bool  # Kiểm tra xem có phải trạng thái cuối hay không
     joint_positions: np.ndarray  # (6D vector) Vị trí góc quay của khớp
     joint_velocities: np.ndarray  # (6D vector) Vận tốc góc của khớp
+    left_foot_touch: np.ndarray  # (1D vector)  Tiếp xúc chân trái của pelvis
+    right_foot_touch: np.ndarray  # (1D vector) Tiếp xúc chân phải
     left_foot_force: np.ndarray  # (3D vector) Lực tiếp xúc chân trái của pelvis
     right_foot_force: np.ndarray  # (3D vector) Lực tiếp xúc chân phải
     left_foot_speed: np.ndarray  # (3D vector) Vận tốc chân trái của pelvis
@@ -169,6 +156,7 @@ class AgentState:
 @dataclass
 class RewardParam:
     S_t: AgentState
+    torque_t: np.ndarray
     action_t: np.ndarray
     action_t_sub1: np.ndarray
     r_swing: float
@@ -180,4 +168,13 @@ class RewardParam:
     x_des: float
     y_des: float
     quat_des: np.ndarray
+    fall_reward : float
 
+
+@dataclass
+class OutputActorModel:
+    pTarget_mu: torch.Tensor
+    dTarget_mu: torch.Tensor
+    pGain_mu: torch.Tensor
+    dGain_mu: torch.Tensor
+    sigma: torch.Tensor

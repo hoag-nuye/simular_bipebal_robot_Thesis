@@ -105,15 +105,9 @@ def collect_and_store(agent: Agent, buffer: ReplayBuffer, critic: Critic,
 
     # Lưu dữ liệu vào buffer
     inputs = agent.get_state_t_input_model(agent.x_des_vel, agent.y_des_vel, tms_clk).float()
-    buffer.add_sample(
-        state=inputs.squeeze(),
-        action=agent.a_t,
-        reward=reward,
-        log_prob=log_prob.cpu().detach().numpy(),
-        sigma=sigma.squeeze().cpu().detach().numpy(),
-        value=critic(inputs).cpu().detach().numpy().reshape(-1)[0],
-        trajectory_id=traj_id
-    )
+    buffer.add_sample(state=inputs.squeeze(), action=agent.a_t, reward=reward, log_prob=log_prob.cpu().detach().numpy(),
+                      value=critic(inputs).cpu().detach().numpy().reshape(-1)[0], returns=0, advantages=0, td_errors=0,
+                      trajectory_id=traj_id)
 
     # Cập nhật hành động a_t-1
     agent.a_t_sub1 = agent.a_t

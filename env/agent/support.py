@@ -108,3 +108,18 @@ def get_clock(r, theta_left, theta_right, N=100, kappa=20.0, L=1):
 
     return p, ECfrc_left, ECfrc_right, ECspd_left, ECspd_right
 
+# # Ví dụ dictionary chứa các tensor
+# tensor_dict = {
+#     'tensor1': torch.randn(32, 10),  # Tensor có kích thước [32, 10]
+#     'tensor2': torch.randn(32, 20),  # Tensor có kích thước [32, 20]
+# }
+#
+# # Mảng chứa các chỉ số ngẫu nhiên
+# indices = torch.tensor([2, 7, 12, 25, 30])  # Ví dụ mảng chỉ số
+#
+# # Tạo dictionary mới chứa các tensor đã lọc
+# filtered_dict = {key: tensor[indices] for key, tensor in tensor_dict.items()}
+#
+# # Kiểm tra kết quả
+# for key, tensor in filtered_dict.items():
+#     print(f"{key}: {tensor.shape}")
