@@ -220,11 +220,10 @@ class ReplayBuffer(Buffer):
     # ====================== LẤY DỮ LIỆU CHO TRAINING ============
     # SỬ DỤNG CHO NHỮNG THUẬT TOÁN ON-POLICY (HUẤN LUYỆN TỪ STATE HIỆN TẠI)
     def sample_batch(self, batch_size=32,):
-        buffer = self.buffer
         mini_batch_dict = []
 
         # Tạo các nhóm tương ứng cho trajectory_ids với chỉ mục
-        trajectory_ids = buffer["trajectory_ids"]
+        trajectory_ids = self.buffer["trajectory_ids"]
 
         # Lấy các giá trị duy nhất từ trajectory_ids và random hóa
         unique_trajectories = np.unique(trajectory_ids)
@@ -259,7 +258,7 @@ class ReplayBuffer(Buffer):
                                     begin_time=start_time)
 
             # Tạo batch_dict trực tiếp bằng cách truy xuất mảng NumPy
-            batch_dict = {key: np.array(buffer[key])[batch_indices] for key in buffer}
+            batch_dict = {key: np.array(self.buffer[key])[batch_indices] for key in self.buffer}
             mini_batch_dict.append(batch_dict)
 
         # for idx, batch_indices in enumerate(batches_indices):

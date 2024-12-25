@@ -66,12 +66,11 @@ if __name__ == "__main__":
     mujoco_process = None
     plot_process = None
 
-
     # Hàm hiển thị mô phỏng
-    def togger_mujoco(agent):
+    def togger_mujoco(is_enable):
         global mujoco_process
-        if mujoco_process is None and (agent is not None):
-            mujoco_process = Process(target=mujoco_viewer_process, args=(agent,))
+        if mujoco_process is None:
+            mujoco_process = Process(target=mujoco_viewer_process, args=(is_enable, ))
             mujoco_process.start()
         elif mujoco_process is not None:
             if mujoco_process.is_alive():
@@ -129,7 +128,7 @@ if __name__ == "__main__":
     agt.add_env(env, 'cassie_env')
 
     # Set timesteps caculator of mujoco
-    agt.agt_model.opt.timestep = 0.002
+    agt.agt_model.opt.timestep = 0.0005
 
     # ************** THAM SỐ CHO THU THẬP VÀ TRAIN **************
     # Phần cứng sử dụng
@@ -159,7 +158,7 @@ if __name__ == "__main__":
     steps_per_policy = pd_control_freq // policy_freq
 
     # Số luông thu thập
-    num_processes = 4
+    num_processes = 5
     # Số lượng trajectory cần thu thập cho mỗi luồng
     max_sample_collect = 50000
     # Số sample thu thập tối đa
@@ -180,7 +179,8 @@ if __name__ == "__main__":
     param_path_dir = 'models/param/'
 
     # Luồng hiển thị mô phỏng
-    keyboard.add_hotkey('v', togger_mujoco, args=(agt,))
+    is_enable_sim = True
+    keyboard.add_hotkey('v', togger_mujoco, args=(is_enable_sim,))
 
     # Luồng hiển thị biểu đồ
     keyboard.add_hotkey('b', togger_plot, args=(param_path_dir,))
@@ -192,6 +192,26 @@ if __name__ == "__main__":
     """
 
     # ********** KHỞI TẠO BIẾN CHO THU THẬP ***********
+    # ============== KHỞI TẠO TẦN SỐ NHỊP BƯỚC ============
+    # Tạo tín hiệu điều khiển agent
+    agt.x_des_vel = 1.35  # Random từ -1.5 đến 1.5 m/s
+    agt.y_des_vel = 0  # Random từ -1.0 đến 1.0 m/s
+    range_steps = 0.6  # (m)
+    cycle_time_steps = range_steps/agt.x_des_vel  # thời gian hoàn thành 1 chu kì bước với vận tốc cho trc
+    num_clock = int(cycle_time_steps/(1/policy_freq))
+    theta_left = 0
+    theta_right = 0.55
+    r = 0.6  # Độ dài pha nhấc chân
+    a_i = 0.5  # Pha tại t = 0
+    agt.set_clock(r=r, N=num_clock, theta_left=theta_left, theta_right=theta_right, a_i=a_i)
+    # agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
+    # agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
+
+    # agt.x_des_vel = 0
+    # agt.y_des_vel = 0
+
+    # dữ nguyên robot ở thẳng đứng
+    agt.quat_des = np.array([1, 0, 0, 0])
     # Tạo biến dừng cho chương trình
     is_done = False
 
@@ -201,28 +221,13 @@ if __name__ == "__main__":
     try:
         #  Thu thập kết thúc khi thu thập đủ 150,000,000 sample
         while agt.total_samples < num_samples:
-
+            is_enable_sim = True
             # ============== HIỂN THỊ THỜI GIAN CHẠY TIẾN TRÌNH ================
             progress_console(total_steps=num_samples,
                              current_steps=agt.total_samples,
                              begin_time=start_time)
 
-            # ============== KHỞI TẠO THAM SỐ CHO TỪNG LUỒNG ============
-            # Tạo tín hiệu điều khiển agent
-            num_clock = 100
-            theta_left = 0
-            theta_right = 0.5
-            r = 0.0
-            agt.set_clock(r=r, N=num_clock, theta_left=theta_left, theta_right=theta_right)
-            # agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
-            # agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
-            agt.x_des_vel = 0  # Random từ -1.5 đến 1.5 m/s
-            agt.y_des_vel = 0  # Random từ -1.0 đến 1.0 m/s
-            # agt.x_des_vel = 0
-            # agt.y_des_vel = 0
 
-            # dữ nguyên robot ở thẳng đứng
-            agt.quat_des = np.array([1, 0, 0, 0])
 
             # ============== THU THẬP TRẢI NGHIỆM ==============
             # Chuẩn bị tham số cho Pool
@@ -261,36 +266,33 @@ if __name__ == "__main__":
                     # Kết hợp kết quả vào ReplayBuffer
                     for result in results:
                         if result is not None:
-                            get_results.append(result)
+                            # Thiết lập lại id traj
+                            # print(current_max_traj_id)
+                            current_max_traj_id = result.sget_range_trajectory(current_max_traj_id)
+
+                            # Lấy dữ liệu data của relay buffer
+                            sample_data = result.get_samples()
+
+                            # tính tổng sample đã thu thập
+                            agt.total_samples += len(next(iter(sample_data.values())))
+
+                            # Gộp dữ liệu từ các luồng
+                            Buffer.append_from_buffer(sample_data)
             except KeyboardInterrupt:
                 pool.terminate()
                 pool.join()
 
             pool.terminate()
 
-            # Lấy dữ liệu từ quá trình thu thập
-            # print(len(results))
-            for result in results:
-                # Thiết lập lại id traj
-                # print(current_max_traj_id)
-                current_max_traj_id = result.sget_range_trajectory(current_max_traj_id)
-
-                # Lấy dữ liệu data của relay buffer
-                sample_data = result.get_samples()
-
-                # tính tổng sample đã thu thập
-                agt.total_samples += len(next(iter(sample_data.values())))
-
-                # Gộp dữ liệu từ các luồng
-                Buffer.append_from_buffer(sample_data)
-
-                # Tạo mini_batch cho quá trình huấn luyện
+            # Tạo mini_batch cho quá trình huấn luyện
             mini_batch = Buffer.sample_batch(batch_size=32)
             mini_batch_size = len(mini_batch)
 
             # Xóa toàn bộ dữ liệu có trong Buffer (giảm bộ nhớ ram)
             Buffer.reset()
-
+            # for i in range(mini_batch[0]["rewards"].shape[0]):
+            #     print(mini_batch[0]["rewards"][i,:, :])
+            # break
             """ 
             ============================================================
             ---------------- QUÁ TRÌNH HUẤN LUYỆN DIỄN RA --------------
@@ -310,6 +312,8 @@ if __name__ == "__main__":
             actor_learning_rate = 0.0001
             critic_learning_rate = 0.0001
 
+            clip_value = 1.0  # Tránh bùng nổ gradient
+
             # Khả năng khám phá (Không sử dụng)
             entropy_weight = 0.02
 
@@ -322,6 +326,8 @@ if __name__ == "__main__":
             # Phần cứng sử dụng
             device = device
 
+            # Dừng việc sử dụng view mujoco trong lúc huấn luyện
+            is_enable_sim = False
             # ********** HUẤN LUYỆN ************
             # Lặp qua từng epoch
             for _ in range(epoch):
@@ -332,10 +338,12 @@ if __name__ == "__main__":
                         train(agt=agt,
                               iters_passed=iters_passed,
                               data_batch=batch,
-                              is_save=True if _ == epoch-1 else False,
+                              # is_save=True if _ == epoch-1 else False,
+                              is_save=True,
                               epochs=epoch,
                               actor_learning_rate=actor_learning_rate,
                               critic_learning_rate=critic_learning_rate,
+                              clip_value=clip_value,
                               entropy_weight=entropy_weight,
                               epsilon=epsilon,
                               output_size=traj_output_size,

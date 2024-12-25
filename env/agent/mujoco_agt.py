@@ -543,7 +543,7 @@ class Agent:
     # ========================= REWARD AND CLOCK =========================
 
     # Tạo clock input, tính toán giá trị phạt cho mỗi pha E_C_frc, E_C_spd
-    def set_clock(self, r, theta_left, theta_right, N=100, kappa=20.0, L=1):
+    def set_clock(self, r, theta_left, theta_right, a_i, N=100, kappa=20.0, L=1):
         self.p, \
             self.ECfrc_left, \
             self.ECfrc_right, \
@@ -551,15 +551,16 @@ class Agent:
             self.ECspd_right = get_clock(r=r,
                                          theta_left=theta_left,
                                          theta_right=theta_right,
+                                         a_i=a_i,
                                          N=N,
                                          kappa=kappa,
                                          L=L)
         self.r = r
 
     # ========================= GET INPUT AND OUTPUT FOR MODEL =========================
-
     # Lấy đầu vào cho mạng bao gồm trạng thái S_t
     def get_state_t_input_model(self, x_des, y_des, time_clock):
+        # print("GET_INPUT: ", self.S_t.time_step, time_clock)
         S_t = torch.cat(self.S_t.as_tensor_list(), dim=0)
         xy_des = torch.tensor([x_des, y_des])
         r = torch.tensor([self.r])

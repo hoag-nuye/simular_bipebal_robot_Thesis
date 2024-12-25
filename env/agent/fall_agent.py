@@ -37,13 +37,11 @@ class FallDetector:
         - 80% giá trị lực trong n gần nhất của cả 2 chân nhỏ hơn ngưỡng lực tối thiểu.
         - 80% giá trị góc nghiêng trong n gần nhất vượt quá ngưỡng góc nghiêng tối đa.
         """
-
-        if len(self.tilt_angle_queue) < self.n:
-            max_tilt_count = 1  # Số giá trị cần thiết để thỏa mãn điều kiện góc nghiêng
-            tilt_exceed_count = sum(abs(angle) > self.max_tilt_threshold for angle in self.tilt_angle_queue)
-            # print("SÔ LẦN: ", tilt_exceed_count)
-            if tilt_exceed_count >= max_tilt_count:
-                # Kiểm tra số lần góc nghiêng vượt quá ngưỡng
+        if len(self.tilt_angle_queue) >= 1:
+            x = self.tilt_angle_queue[-1]
+            # print(x)
+            if x >= self.max_tilt_threshold:
+                # print("NGÃ")
                 return True
 
         if len(self.tilt_angle_queue) == self.n:

@@ -152,6 +152,8 @@ class Actor(nn.Module):
 
         # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
         sigma = nn.functional.softplus(sigma)
+        # torch.clamp(nn.functional.softplus(sigma), min=1e-6)
+
         # print("SHAPE sigma:", sigma.shape)
 
         if mask is None:
@@ -290,6 +292,7 @@ class PPOClip_Training:
                  num_epochs=4,
                  actor_learning_rate=0.0001,
                  critic_learning_rate=0.0001,
+                 clip_value=1.0,
                  path_dir="models/param/"
                  ):
         self.iterations = iters_passed
@@ -310,6 +313,8 @@ class PPOClip_Training:
 
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
+
+        self.clip_value = clip_value
 
     """
     Hàm huấn luyện chính cho PPO với clipping.
@@ -372,6 +377,9 @@ class PPOClip_Training:
         self.actor_optimizer.zero_grad()
         # Tính gradient cho Actor
         actor_loss.backward()  # Tính backward để giữ đồ thị
+        # Clip gradient với giá trị cụ thể
+        torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.clip_value)
+
         # # In giá trị gradient của các tham số trong Actor
         # print("\n=== Gradient của Actor ===")
         # for name, param in self.actor.named_parameters():
@@ -391,6 +399,8 @@ class PPOClip_Training:
         self.critic_optimizer.zero_grad()
         # Tính gradient cho Critic
         critic_loss.backward()  # Tính backward để giữ đồ thị
+        # Clip gradient với giá trị cụ thể
+        torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.clip_value)
         # In giá trị gradient của các tham số trong Critic
         # print("\n=== Gradient của Critic ===")
         # for name, param in self.critic.named_parameters():
@@ -432,34 +442,35 @@ class PPOClip_Training:
                         'reward': self.best_reward,
                     }, f"{self.path_dir}best_model.pth")
 
-        # lưu mô hình Actor và Critic, sau mỗi
+        # lưu mô hình Actor và Critic, sau mỗi 20 lần interation
         PPOClip_Training.iter_counter += 1
-        if self.is_save:
-            if PPOClip_Training.iter_counter % 10 == 0:
-                self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
-                self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
+        # if self.is_save:
+        if PPOClip_Training.iter_counter % 20 == 0:
+            self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
+            self.actor.save_model(f"{self.path_dir}viewer_actor_epoch_latest.pth")
+            self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
 
-                # Kiểm tra file log đã tồn tại hay chưa
-                log_file = f"{self.path_dir}training_metrics_all.pth"
-                if os.path.exists(log_file):
-                    # Nếu đã có log, load dữ liệu cũ
-                    training_log = torch.load(log_file, weights_only=True)
-                else:
-                    # Nếu chưa có log, tạo file mới
-                    training_log = []
+            # Kiểm tra file log đã tồn tại hay chưa
+            log_file = f"{self.path_dir}training_metrics_all.pth"
+            if os.path.exists(log_file):
+                # Nếu đã có log, load dữ liệu cũ
+                training_log = torch.load(log_file, weights_only=True)
+            else:
+                # Nếu chưa có log, tạo file mới
+                training_log = []
 
-                # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
+            # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
 
-                training_log.append({
-                    "iterations_history": PPOClip_Training.iter_counter,
-                    "rewards_history": rewards_history[-1],
-                    "entropy_history": entropy_history[-1],
-                    "actor_loss_history": actor_loss_history[-1],
-                    "critic_loss_history": critic_loss_history[-1]
-                })
+            training_log.append({
+                "iterations_history": int(PPOClip_Training.iter_counter/20),
+                "rewards_history": rewards_history[-1],
+                "entropy_history": entropy_history[-1],
+                "actor_loss_history": actor_loss_history[-1],
+                "critic_loss_history": critic_loss_history[-1]
+            })
 
-                # Lưu lại toàn bộ log
-                torch.save(training_log, log_file)
+            # Lưu lại toàn bộ log
+            torch.save(training_log, log_file)
 
         return actor_loss.item(), critic_loss.item(), mean_reward
 

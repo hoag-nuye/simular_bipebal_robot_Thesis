@@ -128,7 +128,7 @@ def data_processing_console(total_steps, current_steps, begin_time, ncols=50):
 
     sys.stdout.write(
         f"Collected=======================>\n"
-        f"========= Collecting... =========\n"
+        f"========= Processing... =========\n"
         f"Loading: {colorize_bar(percent)}{'█' * num_done}{reset}{'.' * num_left} {int(percent * 100)}%\n"
         f"Processing estimate: {convert_second2time(remaining_time)}\n"
         f"Passed: {convert_second2time(elapsed_time)}\n")
