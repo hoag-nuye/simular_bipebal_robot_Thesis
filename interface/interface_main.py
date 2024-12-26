@@ -47,7 +47,7 @@ def compute_log_pi(actions, mu, sigma):
     """
     normal_dist = dist.Normal(mu, sigma)  # Tạo phân phối chuẩn với mu và sigma
     log_prob = normal_dist.log_prob(actions)  # Tính log-probability
-    return log_prob.sum(dim=-1)  # Tổng log-probability trên tất cả các hành động
+    return log_prob  # Tổng log-probability trên tất cả các hành động
 
 
 # ============= LẤY STATE HIỆN TẠI VÀ TÍNH TOÁN ACTION ================
@@ -63,8 +63,8 @@ def process_action(agent: Agent, actor: Actor, input_model):
 
     # Tính toán tín hiệu điều khiển và hành động
     torque, action = agent.control_signal_complex(mu, sigma,
-                                                   q=agent.atr_t[ActuatorFields.actuator_positions],
-                                                   qd=agent.atr_t[ActuatorFields.actuator_velocities])
+                                                  q=agent.atr_t[ActuatorFields.actuator_positions],
+                                                  qd=agent.atr_t[ActuatorFields.actuator_velocities])
     return action, mu, sigma, torque
 
 
@@ -139,7 +139,6 @@ def trajectory_collection(max_sample_collect,
                           buffer: ReplayCache):
     # ------------------ CÁC BIẾN ĐẾM -----------------------------
     # Sử dụng lock và shared_var trong tiến trình
-
     num_sample = 0  # Đếm số lượng sample đã thu thập được
     traj_counter = 0  # Đếm số trajectory đã được thu thập trong 1 lần thu thập (32 traj) để huấn luyện
     timestep_clock_counter = 0  # Đếm số timestep đã đi qua trong clock (< num_clock)
@@ -188,14 +187,14 @@ def trajectory_collection(max_sample_collect,
                 # -------- Điều khiển agent khi ở trạng thái S_t --------
                 if is_control:
 
-
                     # Thiết lập trạng thái ban đầu của agent
                     if check_begin_state:
                         agt.set_state_begin()
                         check_begin_state = False
 
                     agt.set_state(timestep_clock_counter)
-                    input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel, timestep_clock_counter).float()
+                    input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel,
+                                                              timestep_clock_counter).float()
                     # ---- Lấy dữ liệu về lực chân và độ nghiêng và kiểm tra xem có bị ngã---
                     # Kiểm tra xem có bị ngã hay không
 
@@ -208,7 +207,7 @@ def trajectory_collection(max_sample_collect,
                     # print((left_fz, right_fz))
                     if fall_detector.is_fallen():
                         # print("=========================NGÃ===========================")
-                        fall_reward = -10
+                        fall_reward = 0
                         # print(f"Number trajectory:{traj_counter} -- sample: {samples_of_traj_counter} -- timestep: {timestep_clock_counter}")
                         fall_detector.reset_data()
                         check_terminal_state = True
@@ -235,14 +234,15 @@ def trajectory_collection(max_sample_collect,
                     #       f"control: {torque}\n"
                     #       f"range_control: \n{np.array(list(agt.atr_ctrl_ranges.values()))}\n")
                     # print("===============================")
+                    #  ======== Thu thập trạng thái S_t+1 và tính r_t+1 =============
+                    # Thu thập 1 sample
+
                     # --------------- THU THẬP ĐỦ 50000 SAMPLE THÌ DỪNG ----------
                     with glv.g_lock:
-                        if glv.g_shared_var.value == max_sample_collect:
+                        if glv.g_shared_var.value >= max_sample_collect:
                             is_done = True
                             continue
-                        # Thu thập lần cuối
-                        elif glv.g_shared_var.value ==  max_sample_collect-1:
-                            glv.g_shared_var.value += 1
+                        else:
                             collect_and_store(agent=agt,
                                               buffer=buffer,
                                               critic=Critic_traj,
@@ -254,32 +254,18 @@ def trajectory_collection(max_sample_collect,
                                               torque_t=control,
                                               mu=mu,
                                               sigma=sigma)
-                            is_done = True
-                            continue
-                    #  ======== Thu thập trạng thái S_t+1 và tính r_t+1 =============
-                    # Thu thập 1 sample
-                    collect_and_store(agent=agt,
-                                      buffer=buffer,
-                                      critic=Critic_traj,
-                                      traj_id=traj_counter,
-                                      tms_clk=timestep_clock_counter,
-                                      input_model=input_model,
-                                      action=torque,
-                                      fall_reward=fall_reward,
-                                      torque_t=control,
-                                      mu=mu,
-                                      sigma=sigma)
 
-                    glv.g_shared_var.value += 1
-                    num_sample = glv.g_shared_var.value
-                    # Hiển thị tiến độ thu thập
-                    collect_progress_console(total_steps=max_sample_collect,
-                                             current_steps=num_sample+1,
-                                             begin_time=start_time)
+                            glv.g_shared_var.value += 1
+                            num_sample = glv.g_shared_var.value
 
-                    timestep_clock_counter += 1
-                    samples_of_traj_counter += 1  # Đếm số lượng sample nhưng không reset khi hết 1 clock
-                    is_control = False
+                            # Hiển thị tiến độ thu thập
+                            collect_progress_console(total_steps=max_sample_collect,
+                                                     current_steps=num_sample,
+                                                     begin_time=start_time)
+
+                            timestep_clock_counter += 1
+                            samples_of_traj_counter += 1  # Đếm số lượng sample nhưng không reset khi hết 1 clock
+                            is_control = False
 
                 # -------- Tiếp tục mô phỏng quá trình điều khiển --------
                 if steps_per_policy_counter < num_steps_per_policy:

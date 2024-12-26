@@ -158,12 +158,12 @@ if __name__ == "__main__":
     steps_per_policy = pd_control_freq // policy_freq
 
     # Số luông thu thập
-    num_processes = 5
+    num_processes = 4
     # Số lượng trajectory cần thu thập cho mỗi luồng
     max_sample_collect = 50000
     # Số sample thu thập tối đa
     num_samples_traj = 300  # Số samples tối đa trong 1 trajectory
-    num_samples = 150000000  # số lượng sample cần thu thập
+    num_samples = 50000000  # số lượng sample cần thu thập
 
     # Tạo tham số cho mô hình Actor và Critic
     traj_input_size = 58
@@ -271,18 +271,19 @@ if __name__ == "__main__":
                             current_max_traj_id = result.sget_range_trajectory(current_max_traj_id)
 
                             # Lấy dữ liệu data của relay buffer
-                            sample_data = result.get_samples()
+                            get_results.append(result.get_samples())
 
-                            # tính tổng sample đã thu thập
-                            agt.total_samples += len(next(iter(sample_data.values())))
-
-                            # Gộp dữ liệu từ các luồng
-                            Buffer.append_from_buffer(sample_data)
             except KeyboardInterrupt:
                 pool.terminate()
                 pool.join()
 
-            pool.terminate()
+            # Lấy dữ liệu
+            for get_result in get_results:
+                # tính tổng sample đã thu thập
+                agt.total_samples += len(next(iter(get_result.values())))
+
+                # Gộp dữ liệu từ các luồng
+                Buffer.append_from_buffer(get_result)
 
             # Tạo mini_batch cho quá trình huấn luyện
             mini_batch = Buffer.sample_batch(batch_size=32)

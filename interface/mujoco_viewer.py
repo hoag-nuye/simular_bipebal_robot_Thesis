@@ -12,18 +12,23 @@ import torch
 
 from env.agent.fall_agent import FallDetector
 from env.agent.mujoco_agt import Agent
+from env.mujoco_env import Environment
 from interface.interface_main import process_action
 from models.ppo_model import Actor, find_latest_model
 
 
 def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_cuda=True):
     if is_enable:
+        # ************** THAM SỐ CHO MUJOCO ***************
         agt_xml_path = 'structures/agility_cassie/cassie.xml'
         agt = Agent(agt_xml_path)
-        agt.set_state(0)  # Khởi tạo giá trị ban đầu
-        agt.agt_model.opt.timestep = 0.002  # Set timestep to achieve 2000Hz
-        agt_model = agt.agt_model
-        agt_data = agt.agt_data
+
+        # Thêm thông tin môi trường
+        env = Environment('structures/agility_cassie/environment.xml', agt.agt_data)
+        agt.add_env(env, 'cassie_env')
+
+        # ------------------ SETUP TIME CONTROL --------------------
+        agt.agt_model.opt.timestep = 0.0005  # Set timestep to achieve 2000Hz
         # Định nghĩa tần số
         policy_freq = policy_freq  # Tần số chính sách (Hz) Trong 1s thu thập được 40 trạng thái
         pd_control_freq = pd_control_freq  # Tần số bộ điều khiển PD (Hz)
@@ -53,7 +58,7 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                            pTarget_range=agt.dTarget_ranges).to(device)
 
         # -------------- KIỂM TRA VIỆC NGÃ CỦA ROBOT (final state) -----------
-        fall_detector = FallDetector(n=20, min_force_threshold=5, max_tilt_threshold=90)
+        fall_detector = FallDetector(n=100, min_force_threshold=20, max_tilt_threshold=70)
         # Tải Actor và Critic mới nhất
         path_viewer = "viewer_" + "actor_epoch_latest"
         actor_path = find_latest_model(path_viewer, directory=path_dir)
@@ -67,25 +72,18 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                         if actor_path:
                             Actor_traj.load_model(actor_path)
                             # print(f"Loaded latest Actor model: {actor_path}")
-                        action, mu, sigma, control = process_action(
-                            agent=agt,
-                            actor=Actor_traj,
-                            tms_clk=timestep_clock_counter
-                        )
                         if check_begin_state:
                             agt.set_state_begin()
                             check_begin_state = False
-                        # Kiểm tra xem có bị ngã hay không
-                        if fall_detector.is_fallen():
-                            print("AGENT NGÃ")
-                            fall_detector.reset_data()
-                            # print(len(fall_detector.tilt_angle_queue))
-                            agt.set_state_begin()
-
-                        # Thiết lập mô men điều khiển cho agent
-                        agt.control_agent(control)
-                        # progress_console(agt)
-                        agt.set_state(0)
+                        agt.set_state(timestep_clock_counter)
+                        input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel,
+                                                                  timestep_clock_counter).float()
+                        action, mu, sigma, control = process_action(
+                            agent=agt,
+                            actor=Actor_traj,
+                            input_model=input_model,
+                        )
+                        timestep_clock_counter += 1
 
                         # ---- Lấy dữ liệu về lực chân và độ nghiêng và kiểm tra xem có bị ngã---
                         left_fz, right_fz = agt.get_foot_forces_z()
@@ -93,6 +91,24 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                         fall_detector.update_data(left_fz=left_fz,
                                                   right_fz=right_fz,
                                                   tilt_angle=tilt_angle)
+                        # Kiểm tra xem có bị ngã hay không
+                        if fall_detector.is_fallen():
+                            print("\nAGENT NGÃ")
+                            fall_detector.reset_data()
+                            print(
+                                f"Number trajectory: -- timestep: {timestep_clock_counter}")
+                            # print(len(fall_detector.tilt_angle_queue))
+                            agt.set_state_begin()
+                            timestep_clock_counter = 0
+
+                        # Thiết lập mô men điều khiển cho agent
+
+                        agt.control_agent(control)
+                        # progress_console(agt)
+                        # for idx in range(len(torque_ranges)):
+                        #     torque = np.random.uniform(torque_ranges[idx][0], torque_ranges[idx][1])
+                        #     agt.agt_data.ctrl[idx] = torque
+
                         # print(len(fall_detector.tilt_angle_queue))
                         is_control = False
 
@@ -101,7 +117,7 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                         steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
                         # Thiết lập mô men điều khiển cho agent
                         # agt.control_agent(control)
-                        mujoco.mj_step(agt_model, agt_data)
+                        mujoco.mj_step(agt.agt_model, agt.agt_data)
                         viewer.sync()
                         continue
 
@@ -111,6 +127,7 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                 else:
                     # if check_traj_id(traj_id, 0):
                     #     print("TIME CLOCK: ", timestep_clock_counter)
+                    check_begin_state = True
                     timestep_clock_counter = 0  # Bắt đầu 1 timestep mới của clock
 
 torque_ranges = np.array([

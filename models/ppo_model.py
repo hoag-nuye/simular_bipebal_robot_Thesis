@@ -24,35 +24,68 @@ def create_mask(batch_size, timestamps, lengths_traj, device):
 # Hàm tính toán tổn thất PPO với clipping
 def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None, entropy_weight=0.01, epsilon=0.2,
                    mask=None):
+    if mask is not None:
+        # Mở rộng mask để phù hợp với advantage
+        mask_expanded = mask.unsqueeze(-1)  # Kích thước [batch_size, trajectory_length, 1]
+    else:
+        raise ValueError("Phải cung cấp mask")
+
     if new_log_probs is not None and old_log_probs is not None:
-        ratios = torch.exp(new_log_probs - old_log_probs)
+        ratios = torch.exp(torch.sum((new_log_probs - old_log_probs) * mask_expanded, dim=2, keepdim=True))  # dim=2 loại action_dim
     else:
         raise ValueError("Phải cung cấp (new_log_probs, old_log_probs)")
 
+    # ** Chuẩn hóa advantage **
+
+
+    # Tính tổng có trọng số
+    advantage_sum = (advantage * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
+
+    # Đếm số phần tử hợp lệ
+    valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1)  # [batch_size, 1, 1]
+
+    # Tính Mean
+    advantage_mean = advantage_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+
+    # Tính phương sai (Variance)
+    advantage_squared_diff = (advantage - advantage_mean) ** 2
+    weighted_variance = (advantage_squared_diff * mask_expanded).sum(dim=1, keepdim=True) / (valid_count + 1e-8)
+
+    # Tính Std (Căn bậc hai của Variance)
+    advantage_std = torch.sqrt(weighted_variance)  # [batch_size, 1, 1]
+
+    # Chuẩn hóa advantage
+    advantage_norm = (advantage - advantage_mean) / (advantage_std + 1e-8)  # [batch_size, trajectory_length, 1]
+
     # Tổng hợp các hành động lại
-    ratios = ratios.mean(dim=2, keepdim=True)
     clipped_ratios = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
 
     # Tính surrogate loss
-    surrogate_loss = torch.min(ratios * advantage, clipped_ratios * advantage)
-    if mask is not None:
-        surrogate_loss = surrogate_loss * mask.unsqueeze(-1)
+    surrogate_loss = torch.min(ratios * advantage_norm, clipped_ratios * advantage_norm)
+    surrogate_loss = surrogate_loss * mask_expanded
 
-    # # Tính entropy
-    # if sigma is not None:
-    #     sigma = torch.clamp(sigma, min=1e-3)  # Kiểm soát sigma ko được âm
-    #     entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma) * mask.unsqueeze(-1), dim=1)
-    # else:
-    #     entropy = torch.zeros_like(surrogate_loss)
-
+    # Tính entropy
+    if sigma is not None:
+        sigma = torch.clamp(sigma, min=1e-6)  # Kiểm soát sigma ko được âm
+        entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma**2) * mask_expanded, dim=2, keepdim=True)
+    else:
+        entropy = torch.zeros_like(surrogate_loss)
     # print(f"ratios: {ratios}")
     # print(f"clipped_ratios: {clipped_ratios}")
     # print(f"sigma: {sigma}")
     # print(f"surrogate_loss: {surrogate_loss}")
     # Tổng hợp loss
-    loss = -torch.mean(surrogate_loss)
-    # + entropy_weight * torch.mean(entropy)
-    return loss
+    _loss = -(surrogate_loss + entropy_weight * entropy)
+    loss_sum = (_loss * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
+
+    # Đếm số phần tử hợp lệ
+    valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1)  # [batch_size, 1, 1]
+
+    # Tính Mean loss của trajectory
+    loss_traj_mean = loss_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+
+    # Tính mean loss của batch
+    return loss_traj_mean.mean()
 
 
 def ppo_loss_critic(predicted_values, returns):
