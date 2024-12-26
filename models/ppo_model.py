@@ -103,7 +103,7 @@ def compute_log_pi(actions, mu, sigma, ):
 
 # Mô hình Actor sử dụng LSTM
 class Actor(nn.Module):
-    def __init__(self, input_size, output_size, pTarget_range, lengths_traj=None,
+    def __init__(self, pTarget_range, input_size=None, output_size=None, lengths_traj=None,
                  dropout_rate=0.2):
         self.input_size = input_size
         self.output_size = output_size
@@ -240,7 +240,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, input_size, lengths_traj=None, dropout_rate=0.1):
+    def __init__(self, input_size=None, lengths_traj=None, dropout_rate=0.1):
 
         self.lengths_traj = lengths_traj  # Xử lý padding khi train
         super(Critic, self).__init__()

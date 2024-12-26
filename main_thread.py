@@ -21,6 +21,7 @@ from env.agent.buffer import ReplayBuffer, ReplayCache
 from interface.progress_console import progress_console, train_progress_console
 from interface.mujoco_viewer import mujoco_viewer_process
 from interface.interface_main import trajectory_collection, train
+from models.ppo_model import Actor, Critic
 
 """
 ************************************************************
@@ -215,6 +216,42 @@ if __name__ == "__main__":
     # Tạo biến dừng cho chương trình
     is_done = False
 
+    # ********** KHỞI TẠO BIẾN CHO HUẤN LUYỆN ***********
+    # ============== KHỞI TẠO THAM SỐ MÔ HÌNH ============
+    # ********** KHỞI TẠO BIẾN CHO HUẤN LUYỆN ************
+    # Khởi tạo epoch : số lần nhìn thấy toàn bộ dữ liệu
+    epoch = 4
+
+    # Số lần train qua 1 batch_size
+    iters_passed = 0
+
+    # NOTE: mini_batch được tạo ra từ Buffer
+    # NOTE: Biến max_training_id chính là số iteration (số lần nhìn batch in mini_batch)
+
+    # Tham số học
+    actor_learning_rate = 0.0001
+    critic_learning_rate = 0.0001
+
+    clip_value = 1.0  # Tránh bùng nổ gradient
+
+    # Khả năng khám phá (Không sử dụng)
+    entropy_weight = 0.02
+
+    # Ngưỡng cho thuật toán PPOClip
+    epsilon = 0.2
+
+    # Địa chỉ lưu dữ liệu huấn luyện
+    path_dir = "models/param/"
+
+    # Phần cứng sử dụng
+    device = device
+    # ============== KHỞI TẠO MÔ HÌNH ============
+    actor = Actor(input_size=traj_input_size,
+                  output_size=traj_output_size,
+                  pTarget_range=agt.atr_ctrl_ranges).to(device)
+
+    critic = Critic(input_size=traj_input_size).to(device)
+
     start_time = time.time()
 
     # Bắt ngoại lệ để dừng tiến trình trong terminal
@@ -299,37 +336,11 @@ if __name__ == "__main__":
             ---------------- QUÁ TRÌNH HUẤN LUYỆN DIỄN RA --------------
             ============================================================
             """
-            # ********** KHỞI TẠO BIẾN CHO HUẤN LUYỆN ************
-            # Khởi tạo epoch : số lần nhìn thấy toàn bộ dữ liệu
-            epoch = 4
-
-            # Số lần train qua 1 batch_size
-            iters_passed = 0
-
-            # NOTE: mini_batch được tạo ra từ Buffer
-            # NOTE: Biến max_training_id chính là số iteration (số lần nhìn batch in mini_batch)
-
-            # Tham số học
-            actor_learning_rate = 0.0001
-            critic_learning_rate = 0.0001
-
-            clip_value = 1.0  # Tránh bùng nổ gradient
-
-            # Khả năng khám phá (Không sử dụng)
-            entropy_weight = 0.02
-
-            # Ngưỡng cho thuật toán PPOClip
-            epsilon = 0.2
-
-            # Địa chỉ lưu dữ liệu huấn luyện
-            path_dir = "models/param/"
-
-            # Phần cứng sử dụng
-            device = device
 
             # Dừng việc sử dụng view mujoco trong lúc huấn luyện
             is_enable_sim = False
             # ********** HUẤN LUYỆN ************
+
             # Lặp qua từng epoch
             for _ in range(epoch):
                 start_time_epoch = time.time()
@@ -337,6 +348,8 @@ if __name__ == "__main__":
                     iters_passed += idx
                     actor_loss, critic_loss, mean_reward = \
                         train(agt=agt,
+                              actor=actor,
+                              critic=critic,
                               iters_passed=iters_passed,
                               data_batch=batch,
                               # is_save=True if _ == epoch-1 else False,

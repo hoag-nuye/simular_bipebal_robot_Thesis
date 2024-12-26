@@ -311,7 +311,7 @@ def trajectory_collection(max_sample_collect,
 """
 
 
-def train(agt: Agent, iters_passed, data_batch, is_save, epochs,
+def train(agt: Agent, actor, critic, iters_passed, data_batch, is_save, epochs,
           actor_learning_rate, critic_learning_rate, clip_value, entropy_weight, epsilon,
           output_size, path_dir, device):
     # Kiểm tra xem có CUDA hay không
@@ -328,11 +328,13 @@ def train(agt: Agent, iters_passed, data_batch, is_save, epochs,
     data_batch["lengths_traj"] = data_batch["lengths_traj"].cpu()  # Chuyển về CPU
     data_batch["lengths_traj"] = data_batch["lengths_traj"].to(torch.int64)  # Đảm bảo kiểu int64
 
-    actor = Actor(input_size=input_size, output_size=output_size,
-                  lengths_traj=data_batch["lengths_traj"],
-                  pTarget_range=agt.atr_ctrl_ranges).to(device)
+    actor.input_size = input_size
+    actor.output_size = output_size
+    actor.lengths_traj = data_batch["lengths_traj"]
 
-    critic = Critic(input_size=input_size, lengths_traj=data_batch["lengths_traj"]).to(device)
+    critic.input_size = input_size
+    critic.lengths_traj = data_batch["lengths_traj"]
+
     ppo_clip_training = PPOClip_Training(iters_passed=iters_passed,
                                          actor_model=actor,
                                          critic_model=critic,
