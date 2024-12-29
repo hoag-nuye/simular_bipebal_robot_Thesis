@@ -31,12 +31,12 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None
         raise ValueError("Phải cung cấp mask")
 
     if new_log_probs is not None and old_log_probs is not None:
-        ratios = torch.exp(torch.sum((new_log_probs - old_log_probs) * mask_expanded, dim=2, keepdim=True))  # dim=2 loại action_dim
+        ratios = torch.exp(
+            torch.sum((new_log_probs - old_log_probs) * mask_expanded, dim=2, keepdim=True))  # dim=2 loại action_dim
     else:
         raise ValueError("Phải cung cấp (new_log_probs, old_log_probs)")
 
     # ** Chuẩn hóa advantage **
-
 
     # Tính tổng có trọng số
     advantage_sum = (advantage * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
@@ -66,8 +66,7 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None
 
     # Tính entropy
     if sigma is not None:
-        sigma = torch.clamp(sigma, min=1e-6)  # Kiểm soát sigma ko được âm
-        entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma**2) * mask_expanded, dim=2, keepdim=True)
+        entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma ** 2) * mask_expanded, dim=2, keepdim=True)
     else:
         entropy = torch.zeros_like(surrogate_loss)
     # print(f"ratios: {ratios}")
@@ -75,7 +74,7 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None
     # print(f"sigma: {sigma}")
     # print(f"surrogate_loss: {surrogate_loss}")
     # Tổng hợp loss
-    _loss = -(surrogate_loss + entropy_weight * entropy)
+    _loss = -surrogate_loss + entropy_weight * entropy
     loss_sum = (_loss * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
 
     # Đếm số phần tử hợp lệ
@@ -88,10 +87,42 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None
     return loss_traj_mean.mean()
 
 
-def ppo_loss_critic(predicted_values, returns):
+def ppo_loss_critic(predicted_values, returns, mask=None):
+    if mask is not None:
+        # Mở rộng mask để phù hợp với advantage
+        mask_expanded = mask.unsqueeze(-1)  # Kích thước [batch_size, trajectory_length, 1]
+    else:
+        raise ValueError("Phải cung cấp mask")
+    # ** Chuẩn hóa advantage **
+
+    # Tính tổng có trọng số
+    returns_sum = (returns * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
+
+    # Đếm số phần tử hợp lệ
+    valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1)  # [batch_size, 1, 1]
+
+    # Tính Mean
+    returns_mean = returns_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+
+    # Tính phương sai (Variance)
+    returns_squared_diff = (returns - returns_mean) ** 2
+    weighted_variance = (returns_squared_diff * mask_expanded).sum(dim=1, keepdim=True) / (valid_count + 1e-8)
+
+    # Tính Std (Căn bậc hai của Variance)
+    returns_std = torch.sqrt(weighted_variance)  # [batch_size, 1, 1]
+
+    # Chuẩn hóa advantage
+    returns_norm = (returns - returns_mean) / (returns_std + 1e-8)  # [batch_size, trajectory_length, 1]
     # Chỉ tính toán trên các giá trị không phải padding
-    critic_loss = F.mse_loss(predicted_values, returns, reduction='mean')
-    return critic_loss
+    # Tính hiệu giữa giá trị dự đoán và giá trị thực
+    differences = predicted_values - returns_norm
+    # Tính bình phương của các hiệu
+    squared_differences = differences ** 2
+    # Tính trung bình của các bình phương hiệu
+    loss_sum = (squared_differences * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
+    # Tính Mean loss của trajectory
+    loss_traj_mean = loss_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+    return loss_traj_mean.mean()
 
 
 def compute_log_pi(actions, mu, sigma, ):
@@ -103,10 +134,12 @@ def compute_log_pi(actions, mu, sigma, ):
 
 # Mô hình Actor sử dụng LSTM
 class Actor(nn.Module):
-    def __init__(self, pTarget_range, input_size=None, output_size=None, lengths_traj=None,
+    def __init__(self, pTarget_range, input_size=None, output_size=None,
+                 lengths_traj=None, sigma_warmUp=None,
                  dropout_rate=0.2):
         self.input_size = input_size
         self.output_size = output_size
+        self.sigma_warmUp = sigma_warmUp
         # self.dynamics_randomization = dynamics_randomization
         self.pTarget_min = torch.tensor([v[0] for v in pTarget_range.values()])
         self.pTarget_max = torch.tensor([v[1] for v in pTarget_range.values()])
@@ -114,7 +147,7 @@ class Actor(nn.Module):
         self.lengths_traj = lengths_traj  # Xử lý các dữ liệu padding khi train
         super(Actor, self).__init__()
         # LSTM layers
-        self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
+        self.lstm1 = nn.LSTM(self.input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
         # self.activation1 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
         # self.dropout1 = nn.Dropout(dropout_rate)  # Dropout 1
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
@@ -123,7 +156,7 @@ class Actor(nn.Module):
 
         # Fully Connected layer
         self.output_layer = nn.Sequential(
-            nn.Linear(128, output_size),  # Kết nối đầy đủ
+            nn.Linear(128, self.output_size),  # Kết nối đầy đủ
             # nn.Dropout(dropout_rate)  # Dropout cuối
         )
 
@@ -184,8 +217,13 @@ class Actor(nn.Module):
         mu = torch.cat([pTarget_mu, pGain_mu, dGain_mu], dim=-1)
 
         # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
-        sigma = nn.functional.softplus(sigma)
-        # torch.clamp(nn.functional.softplus(sigma), min=1e-6)
+        # sigma = nn.functional.softplus(sigma)
+        # print(self.sigma_warmUp)
+        # raise "TẮT"
+        if self.sigma_warmUp is None:
+            sigma = torch.clamp(nn.functional.softplus(sigma), min=0.01)
+        else:
+            sigma = torch.clamp(nn.functional.softplus(sigma), min=self.sigma_warmUp)
 
         # print("SHAPE sigma:", sigma.shape)
 
@@ -237,15 +275,16 @@ class Actor(nn.Module):
             # print(f"Model weights loaded successfully from {path}")
         except Exception as e:
             print(f"Error loading model weights from {path}: {e}")
+            raise f"KHÔNG LOAD ĐƯỢC ACTOR"
 
 
 class Critic(nn.Module):
     def __init__(self, input_size=None, lengths_traj=None, dropout_rate=0.1):
-
+        self.input_size = input_size
         self.lengths_traj = lengths_traj  # Xử lý padding khi train
         super(Critic, self).__init__()
         # LSTM layers
-        self.lstm1 = nn.LSTM(input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
+        self.lstm1 = nn.LSTM(self.input_size, 128, batch_first=True)  # Lớp LSTM đầu tiên
         # self.activation1 = nn.ReLU()  # Hàm kích hoạt sau LSTM1
         # self.dropout1 = nn.Dropout(dropout_rate)  # Dropout 1
         self.lstm2 = nn.LSTM(128, 128, batch_first=True)  # Lớp LSTM thứ hai
@@ -303,11 +342,30 @@ class Critic(nn.Module):
             # print(f"Model weights loaded successfully from {path}")
         except Exception as e:
             print(f"Error loading model weights from {path}: {e}")
+            raise f"KHÔNG LOAD ĐƯỢC CRITIC"
+
+
+def mean_mask(values, mask):
+    mask_expanded = mask.unsqueeze(-1)  # Kích thước [batch_size, trajectory_length, 1]
+    # Đếm số phần tử hợp lệ
+    valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1)  # [batch_size, 1, 1]
+    values_sum = (values * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
+    # Tính Mean loss của trajectory
+    values_mean = values_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+    return values_mean.mean()
 
 
 class PPOClip_Training:
     # Biến tĩnh tính toán số lần khởi tạo training (= số lần training)
     iter_counter = 0
+
+    # Lưu kết quả cac lần train
+    history_results = {
+        "entropy": [],
+        "actor_loss": [],
+        "critic_loss": [],
+        "mean_rewards": []
+    }
 
     def __init__(self,
                  iters_passed,
@@ -375,21 +433,12 @@ class PPOClip_Training:
     train_data = []  # Danh sách lưu trữ 10 epoch gần nhất
 
     def train(self):
-        # Tạo các danh sách lưu trữ giá trị
-        iterations_history = []
-        rewards_history = []
-        entropy_history = []
-        actor_loss_history = []
-        critic_loss_history = []
 
         # ====== THAY ĐỔI LEARNING RATE VÀ ENTROPY WEIGHT ==========
         # Kiểm tra xem mô hình có đang bị vướng vào điểm cực trị cục bộ
         # hoặc là không khám phá thêm được gì mới (entropy ít biến động)
 
-        self.entropy_weight *= 0.99 ** self.iterations  # Annealing entropy
-
-        # Chuẩn hóa advantages
-        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+        # self.entropy_weight *= 0.99 ** self.iterations  # Annealing entropy
 
         # ** ------------- Huấn luyện Actor -----------------**
         # Forward qua model để tính các giá trị mới
@@ -411,7 +460,8 @@ class PPOClip_Training:
         # Tính gradient cho Actor
         actor_loss.backward()  # Tính backward để giữ đồ thị
         # Clip gradient với giá trị cụ thể
-        torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.clip_value)
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
+        # torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.clip_value)
 
         # # In giá trị gradient của các tham số trong Actor
         # print("\n=== Gradient của Actor ===")
@@ -428,12 +478,13 @@ class PPOClip_Training:
         # Forward qua model để tính các giá trị mới
         predict_critic = self.critic(self.states)
         # Tính loss
-        critic_loss = ppo_loss_critic(predict_critic, self.returns)
+        critic_loss = ppo_loss_critic(predict_critic, self.returns, mask=mask)
         self.critic_optimizer.zero_grad()
         # Tính gradient cho Critic
         critic_loss.backward()  # Tính backward để giữ đồ thị
         # Clip gradient với giá trị cụ thể
-        torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.clip_value)
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+        # torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.clip_value)
         # In giá trị gradient của các tham số trong Critic
         # print("\n=== Gradient của Critic ===")
         # for name, param in self.critic.named_parameters():
@@ -447,38 +498,38 @@ class PPOClip_Training:
 
         # Lưu mô hình sau khi xong 1 iterator (4 epoch)
         # Tính entropy để theo dõi mức độ ngẫu nhiên của policy
-        iterations_history.append(self.iterations)
-        entropy = -torch.sum(sigma.log(), dim=-1).mean()  # Entropy tính từ sigma
-        entropy_history.append(entropy.item())  # Lưu lại Entropy
-        actor_loss_history.append(actor_loss.item())  # Lưu lại Actor loss
-        critic_loss_history.append(critic_loss.item())  # Lưu lại Critic loss
+        # iterations_history.append(self.it.sum(dim=1, keepdim=True)
+        entropy = 0.5 * torch.sum(1 + torch.log(2 * torch.pi * sigma**2), dim=2, keepdim=True)
+        PPOClip_Training.history_results["entropy"].append(mean_mask(entropy, mask).item())  # Lưu lại Entropy
+        PPOClip_Training.history_results["actor_loss"].append(actor_loss.item())  # Lưu lại Actor loss
+        PPOClip_Training.history_results["critic_loss"].append(critic_loss.item())  # Lưu lại Critic loss
         # Tính reward trung bình
-        mean_reward = self.rewards.mean().item()
-        rewards_history.append(mean_reward)  # Lưu lại reward
+        mean_rewards = mean_mask(self.rewards, mask).item()
+        PPOClip_Training.history_results["mean_rewards"].append(mean_rewards)  # Lưu lại reward
 
         # =========== LƯU THÔNG TIN MÔ HÌNH SAU KHI HUẤN LUYỆN ===================
 
-        # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
-        if self.iterations == 0:
-            self.best_reward = mean_reward
-        else:
-            if self.best_reward is not None:
-                if mean_reward > self.best_reward:
-                    self.best_reward = mean_reward
-                    best_actor_model = self.actor.state_dict()  # Lưu tham số của actor model
-                    best_critic_model = self.critic.state_dict()  # Lưu tham số của critic model
-
-                    # Lưu mô hình tốt nhất
-                    torch.save({
-                        'actor_model': best_actor_model,
-                        'critic_model': best_critic_model,
-                        'reward': self.best_reward,
-                    }, f"{self.path_dir}best_model.pth")
+        # # So sánh phần thưởng tốt nhất và lưu mô hình nếu có cải thiện
+        # if self.iterations == 0:
+        #     self.best_reward = mean_reward
+        # else:
+        #     if self.best_reward is not None:
+        #         if mean_reward > self.best_reward:
+        #             self.best_reward = mean_reward
+        #             best_actor_model = self.actor.state_dict()  # Lưu tham số của actor model
+        #             best_critic_model = self.critic.state_dict()  # Lưu tham số của critic model
+        #
+        #             # Lưu mô hình tốt nhất
+        #             torch.save({
+        #                 'actor_model': best_actor_model,
+        #                 'critic_model': best_critic_model,
+        #                 'reward': self.best_reward,
+        #             }, f"{self.path_dir}best_model.pth")
 
         # lưu mô hình Actor và Critic, sau mỗi 20 lần interation
         PPOClip_Training.iter_counter += 1
-        # if self.is_save:
-        if PPOClip_Training.iter_counter % 20 == 0:
+        if self.is_save:
+            # if PPOClip_Training.iter_counter % 5 == 0:
             self.actor.save_model(f"{self.path_dir}actor_epoch_latest.pth")
             self.actor.save_model(f"{self.path_dir}viewer_actor_epoch_latest.pth")
             self.critic.save_model(f"{self.path_dir}critic_epoch_latest.pth")
@@ -495,17 +546,19 @@ class PPOClip_Training:
             # Thêm dữ liệu mới vào log (chỉ lấy dữ liệu epoch cuối)
 
             training_log.append({
-                "iterations_history": int(PPOClip_Training.iter_counter/20),
-                "rewards_history": rewards_history[-1],
-                "entropy_history": entropy_history[-1],
-                "actor_loss_history": actor_loss_history[-1],
-                "critic_loss_history": critic_loss_history[-1]
+                "iterations_history": int(PPOClip_Training.iter_counter),
+                "rewards_history": sum(self.history_results["mean_rewards"]) / (len(self.history_results["mean_rewards"]) + 1e-6),
+                "entropy_history": sum(self.history_results["entropy"]) / (len(self.history_results["entropy"]) + 1e-6),
+                "actor_loss_history": sum(self.history_results["actor_loss"]) / (len(self.history_results["actor_loss"]) + 1e-6),
+                "critic_loss_history": sum(self.history_results["critic_loss"]) / (len(self.history_results["critic_loss"]) + 1e-6)
             })
+            for key in PPOClip_Training.history_results:
+                PPOClip_Training.history_results[key] = []
 
             # Lưu lại toàn bộ log
             torch.save(training_log, log_file)
 
-        return actor_loss.item(), critic_loss.item(), mean_reward
+        return actor_loss.item(), critic_loss.item(), mean_rewards
 
 
 def find_latest_model(prefix, directory="."):

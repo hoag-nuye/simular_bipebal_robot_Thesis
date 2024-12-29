@@ -37,7 +37,10 @@ env = Environment('structures/agility_cassie/environment.xml', agt.agt_data)
 agt.add_env(env, 'cassie_env')
 agt.set_state(0)  # Khởi tạo giá trị ban đầu
 
-plot_param_process(path_dir='models/param/', update_interval=5000)
+# for (k, v) in agt.dTarget_ranges.items():
+#     print(v)
+# plot_param_process(path_dir='models/param/', update_interval=5000)
+# plot_param_process(path_dir='models/param/training/', filename='training_metrics_all_day1.pth',update_interval=5000)
 # mujoco_viewer_process_begin(agt)
 # mujoco_viewer_process(agt=agt, is_enable=True,policy_freq=40, pd_control_freq=2000, use_cuda=True)
 # mujoco_viewer_process_external_state(agt=agt, policy_freq=40, pd_control_freq=2000, use_cuda=True)

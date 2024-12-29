@@ -36,6 +36,17 @@ from env.agent.dataclass_agt import AgentState, StateFields, ActuatorFields, Joi
 '''
 
 
+def rotate_vector(quat, vec):
+    """Chuyển vector từ local frame sang world frame dựa trên quaternion."""
+    q_w, q_x, q_y, q_z = quat[0], quat[1], quat[2], quat[3]
+    mat = np.array([
+        [1 - 2 * (q_y ** 2 + q_z ** 2), 2 * (q_x * q_y - q_z * q_w), 2 * (q_x * q_z + q_y * q_w)],
+        [2 * (q_x * q_y + q_z * q_w), 1 - 2 * (q_x ** 2 + q_z ** 2), 2 * (q_y * q_z - q_x * q_w)],
+        [2 * (q_x * q_z - q_y * q_w), 2 * (q_y * q_z + q_x * q_w), 1 - 2 * (q_x ** 2 + q_y ** 2)]
+    ])
+    return mat @ vec
+
+
 class Agent:
 
     # ========================= Initial environment =========================
@@ -278,6 +289,52 @@ class Agent:
 
     def set_state(self, time_step):
         # Tạo một đối tượng mới để lưu trữ trạng thái S_t
+
+        left_foot_touch = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_touch]
+        ])
+        right_foot_touch = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_touch]
+        ])
+
+        left_foot_force = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_force]
+        ])
+        right_foot_force = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_force]
+        ])
+
+        left_foot_speed = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_speed]
+        ])
+        right_foot_speed = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_speed]
+        ])
+
+        pelvis_orientation = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_orientation]
+        ])
+
+        pelvis_velocity = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_velocity]
+        ])
+        pelvis_angular_velocity = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_angular_velocity]
+        ])
+        pelvis_linear_acceleration = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_linear_acceleration]
+        ])
+
+        # ============= CHUYỂN ĐỔI HƯỚNG VECTOR QUA GÓC XOAY ==================
+        left_foot_force = rotate_vector(pelvis_orientation, left_foot_force)*left_foot_touch.any()
+        right_foot_force = rotate_vector(pelvis_orientation, right_foot_force)*right_foot_touch.any()
+        left_foot_speed = rotate_vector(pelvis_orientation, left_foot_speed)*(not left_foot_touch.any())
+        right_foot_speed = rotate_vector(pelvis_orientation, right_foot_speed)*(not right_foot_touch.any())
+        pelvis_velocity = rotate_vector(pelvis_orientation, pelvis_velocity)
+        pelvis_angular_velocity = rotate_vector(pelvis_orientation, pelvis_angular_velocity)
+        pelvis_linear_acceleration = rotate_vector(pelvis_orientation, pelvis_linear_acceleration)
+
+        # ============= LƯU TRỮ THÔNG TIN ==================
         self.S_t = AgentState(
             time_step=time_step,
             isTerminalState=False,
@@ -287,36 +344,16 @@ class Agent:
             joint_velocities=np.array([
                 self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_velocities]
             ]),
-            left_foot_touch=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_touch]
-            ]),
-            right_foot_touch=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_touch]
-            ]),
-            left_foot_force=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_force]
-            ]),
-            right_foot_force=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_force]
-            ]),
-            left_foot_speed=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_speed]
-            ]),
-            right_foot_speed=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_speed]
-            ]),
-            pelvis_orientation=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_orientation]
-            ]),
-            pelvis_velocity=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_velocity]
-            ]),
-            pelvis_angular_velocity=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_angular_velocity]
-            ]),
-            pelvis_linear_acceleration=np.array([
-                self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_linear_acceleration]
-            ]),
+            left_foot_touch=left_foot_touch,
+            right_foot_touch=right_foot_touch,
+            left_foot_force=left_foot_force,
+            right_foot_force=right_foot_force,
+            left_foot_speed=left_foot_speed,
+            right_foot_speed=right_foot_speed,
+            pelvis_orientation=pelvis_orientation,
+            pelvis_velocity=pelvis_velocity,
+            pelvis_angular_velocity=pelvis_angular_velocity,
+            pelvis_linear_acceleration=pelvis_linear_acceleration,
         )
         # Lưu giá trị actuator hiện tại
         self.atr_t[ActuatorFields.actuator_positions] = np.array(
@@ -417,21 +454,20 @@ class Agent:
         pTarget_mu, dTarget_mu = mu[: self.atr_num], mu[: self.atr_num]
         pGain_mu, dGain_mu = mu[self.atr_num:self.atr_num * 2], mu[self.atr_num * 2:self.atr_num * 3]
 
-        pTarget_sigma, dTarget_sigma = (sigma[self.atr_num],
-                                        sigma[self.atr_num])
+        pTarget_sigma, dTarget_sigma = (sigma[:self.atr_num],
+                                        sigma[:self.atr_num])
 
         pGain_sigma, dGain_sigma = (sigma[self.atr_num:self.atr_num * 2],
                                     sigma[self.atr_num * 2:self.atr_num * 3])
 
         # Lấy mẫu từ phân phối
-
         dist_pTarget = torch.distributions.Normal(pTarget_mu, pTarget_sigma)
         sampled_pTarget = dist_pTarget.sample()
         # dist_dTarget = torch.distributions.Normal(dTarget_mu, dTarget_sigma)
         # sampled_dTarget = dist_dTarget.sample()
         dist_pGain = torch.distributions.Normal(pGain_mu, pGain_sigma)
         sampled_pGain = dist_pGain.sample()
-        dist_dGain = torch.distributions.Normal(dGain_mu, dGain_sigma )
+        dist_dGain = torch.distributions.Normal(dGain_mu, dGain_sigma)
         sampled_dGain = dist_dGain.sample()
 
         # Tính toán torque
@@ -469,16 +505,16 @@ class Agent:
         #       f"SMG_pGain: {sigma[20:30]}\n"
 
         # print(f"control: {torque}\n")
-              # f"range_control: \n{np.array([[-4.5, 4.5],
-              #                               [-4.5, 4.5],
-              #                               [-12.2, 12.2],
-              #                               [-12.2, 12.2],
-              #                               [-0.9, 0.9],
-              #                               [-4.5, 4.5],
-              #                               [-4.5, 4.5],
-              #                               [-12.2, 12.2],
-              #                               [-12.2, 12.2],
-              #                               [-0.9, 0.9]])}\n")
+        # f"range_control: \n{np.array([[-4.5, 4.5],
+        #                               [-4.5, 4.5],
+        #                               [-12.2, 12.2],
+        #                               [-12.2, 12.2],
+        #                               [-0.9, 0.9],
+        #                               [-4.5, 4.5],
+        #                               [-4.5, 4.5],
+        #                               [-12.2, 12.2],
+        #                               [-12.2, 12.2],
+        #                               [-0.9, 0.9]])}\n")
         # print("===============================")
 
         return torque, action

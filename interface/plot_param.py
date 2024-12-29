@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 
-def plot_param_process(path_dir, update_interval=2000):
+def plot_param_process(path_dir, filename='training_metrics_all.pth',update_interval=2000):
 
 
     # Vẽ biểu đồ
@@ -53,7 +53,7 @@ def plot_param_process(path_dir, update_interval=2000):
     def update(frame):
         try:
             # Đọc dữ liệu từ file (dữ liệu mới nhất)
-            metrics_all = torch.load(f"{path_dir}training_metrics_all.pth", weights_only=True)
+            metrics_all = torch.load(f"{path_dir}{filename}", weights_only=True)
 
             # Trích xuất dữ liệu
             new_iterations = [metrics["iterations_history"] for metrics in metrics_all]
@@ -89,7 +89,7 @@ def plot_param_process(path_dir, update_interval=2000):
     plt.show()
 
 
-def plot_param_process(path_dir, update_interval=2000):
+def plot_param_process(path_dir, filename='training_metrics_all.pth', update_interval=2000):
 
 
     # Vẽ biểu đồ
@@ -132,14 +132,18 @@ def plot_param_process(path_dir, update_interval=2000):
     def update(frame):
         try:
             # Đọc dữ liệu từ file (dữ liệu mới nhất)
-            metrics_all = torch.load(f"{path_dir}training_metrics_all.pth", weights_only=True)
+            metrics_all = torch.load(f"{path_dir}{filename}", weights_only=True)
 
             # Trích xuất dữ liệu
             new_iterations = [metrics["iterations_history"] for metrics in metrics_all]
             new_rewards = [metrics["rewards_history"] for metrics in metrics_all]
             new_entropy = [metrics["entropy_history"] for metrics in metrics_all]
-            new_actor_loss = [metrics["actor_loss_history"] for metrics in metrics_all]
+            new_actor_loss = [metrics["actor_loss_history"]  for metrics in metrics_all]
             new_critic_loss = [metrics["critic_loss_history"] for metrics in metrics_all]
+            # new_actor_loss = [metrics["actor_loss_history"] if metrics["actor_loss_history"] < 1 else 1 for metrics in
+            #                   metrics_all]
+            # new_critic_loss = [metrics["critic_loss_history"] if metrics["critic_loss_history"] < 5 else 5 for metrics
+            #                    in metrics_all]
 
             # Cập nhật dữ liệu cho các đường đồ thị
             lines["rewards"].set_data(new_iterations, new_rewards)

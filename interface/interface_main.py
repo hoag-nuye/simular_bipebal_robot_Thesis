@@ -133,6 +133,7 @@ def trajectory_collection(max_sample_collect,
                           num_timestep_clock,
                           num_steps_per_policy,
                           agt: Agent,
+                          sigma_warmUp,
                           traj_input_size, traj_output_size,
                           param_path_dir,
                           device,
@@ -147,7 +148,8 @@ def trajectory_collection(max_sample_collect,
     # ------------------ TẠO MẠNG ACTOR VÀ CRITIC -----------------
     device = device
     Actor_traj = Actor(input_size=traj_input_size, output_size=traj_output_size,
-                       pTarget_range=agt.dTarget_ranges).to(device)
+                       pTarget_range=agt.dTarget_ranges,
+                       sigma_warmUp=sigma_warmUp).to(device)
     Critic_traj = Critic(input_size=traj_input_size).to(device)
     # Tải Actor và Critic mới nhất
     # actor_path = find_latest_model("actor_epoch_", directory=param_path_dir)
@@ -165,7 +167,6 @@ def trajectory_collection(max_sample_collect,
     check_begin_state = True  # Thiết lập vị trí ban đầu
     check_terminal_state = False  # Kiểm tra trạng thái cuối
     fall_detector = FallDetector(n=30, min_force_threshold=10, max_tilt_threshold=85)
-
     # ------------------------ SIMULAR ----------------------
     is_control = True  # Kiểm tra xem đã điều khiển agent chưa
     # Create viewer with UI options
@@ -207,13 +208,13 @@ def trajectory_collection(max_sample_collect,
                     # print((left_fz, right_fz))
                     if fall_detector.is_fallen():
                         # print("=========================NGÃ===========================")
-                        fall_reward = 0
+                        fall_reward = -1
                         # print(f"Number trajectory:{traj_counter} -- sample: {samples_of_traj_counter} -- timestep: {timestep_clock_counter}")
                         fall_detector.reset_data()
                         check_terminal_state = True
                     else:
                         # print(f"Number trajectory:{traj_counter} -- sample: {samples_of_traj_counter}")
-                        fall_reward = 0
+                        fall_reward = 0.5
 
                     #  ======== ĐIỀU KHIỂN AGENT =============
                     torque, mu, sigma, control = process_action(
@@ -312,7 +313,8 @@ def trajectory_collection(max_sample_collect,
 
 
 def train(agt: Agent, actor, critic, iters_passed, data_batch, is_save, epochs,
-          actor_learning_rate, critic_learning_rate, clip_value, entropy_weight, epsilon,
+          actor_learning_rate, critic_learning_rate, clip_value, entropy_weight,
+          epsilon,
           output_size, path_dir, device):
     # Kiểm tra xem có CUDA hay không
     # https://pytorch.org/get-started/locally/

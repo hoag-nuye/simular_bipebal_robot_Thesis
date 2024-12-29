@@ -18,10 +18,10 @@ from env.agent.mujoco_agt import Agent
 from env.mujoco_env import Environment
 from interface.plot_param import plot_param_process
 from env.agent.buffer import ReplayBuffer, ReplayCache
-from interface.progress_console import progress_console, train_progress_console
+from interface.progress_console import progress_console, train_progress_console, data_processing_console
 from interface.mujoco_viewer import mujoco_viewer_process
 from interface.interface_main import trajectory_collection, train
-from models.ppo_model import Actor, Critic
+from models.ppo_model import Actor, Critic, find_latest_model
 
 """
 ************************************************************
@@ -161,10 +161,10 @@ if __name__ == "__main__":
     # Số luông thu thập
     num_processes = 4
     # Số lượng trajectory cần thu thập cho mỗi luồng
-    max_sample_collect = 50000
+    max_sample_collect = 20000
     # Số sample thu thập tối đa
     num_samples_traj = 300  # Số samples tối đa trong 1 trajectory
-    num_samples = 50000000  # số lượng sample cần thu thập
+    num_samples = 35000000  # số lượng sample cần thu thập
 
     # Tạo tham số cho mô hình Actor và Critic
     traj_input_size = 58
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     # ********** KHỞI TẠO BIẾN CHO THU THẬP ***********
     # ============== KHỞI TẠO TẦN SỐ NHỊP BƯỚC ============
     # Tạo tín hiệu điều khiển agent
-    agt.x_des_vel = 1.35  # Random từ -1.5 đến 1.5 m/s
+    agt.x_des_vel = 0.8  # Random từ -1.5 đến 1.5 m/s
     agt.y_des_vel = 0  # Random từ -1.0 đến 1.0 m/s
     range_steps = 0.6  # (m)
     cycle_time_steps = range_steps/agt.x_des_vel  # thời gian hoàn thành 1 chu kì bước với vận tốc cho trc
@@ -203,7 +203,7 @@ if __name__ == "__main__":
     theta_left = 0
     theta_right = 0.55
     r = 0.6  # Độ dài pha nhấc chân
-    a_i = 0.5  # Pha tại t = 0
+    a_i = 0.3  # Pha tại t = 0
     agt.set_clock(r=r, N=num_clock, theta_left=theta_left, theta_right=theta_right, a_i=a_i)
     # agt.x_des_vel = random.uniform(-1.5, 1.5)  # Random từ -1.5 đến 1.5 m/s
     # agt.y_des_vel = random.uniform(-1.0, 1.0)  # Random từ -1.0 đến 1.0 m/s
@@ -234,7 +234,7 @@ if __name__ == "__main__":
 
     clip_value = 1.0  # Tránh bùng nổ gradient
 
-    # Khả năng khám phá (Không sử dụng)
+    # Khả năng khám phá
     entropy_weight = 0.02
 
     # Ngưỡng cho thuật toán PPOClip
@@ -251,13 +251,30 @@ if __name__ == "__main__":
                   pTarget_range=agt.atr_ctrl_ranges).to(device)
 
     critic = Critic(input_size=traj_input_size).to(device)
+    # actor_path = find_latest_model("actor_epoch_latest", directory=param_path_dir)
+    # critic_path = find_latest_model("critic_epoch_latest", directory=param_path_dir)
+    # if actor_path:
+    #     actor.load_model(actor_path)
+    #     # print(f"Loaded latest Actor model: {actor_path}")
+    # if critic_path:
+    #     critic.load_model(critic_path)
+    #     # print(f"Loaded latest Critic model: {critic_path}")
+    # ================== QUÁ TRÌNH WARMUP CHO SIGMA ĐỂ TĂNG KHÁM PHÁ =================
+    sigma_initial = 0.5
+    sigma_final = 0.01
+    T = int(num_samples/max_sample_collect*0.3)  # tổng số bước để hoàn thành decay
+
+
 
     start_time = time.time()
-
     # Bắt ngoại lệ để dừng tiến trình trong terminal
     try:
         #  Thu thập kết thúc khi thu thập đủ 150,000,000 sample
         while agt.total_samples < num_samples:
+            step = agt.total_samples/max_sample_collect
+            sigma_warmUp = sigma_initial - (sigma_initial - sigma_final) * (step / T)
+            # print(step, T, sigma_warmUp)
+            # raise "TẮT"
             is_enable_sim = True
             # ============== HIỂN THỊ THỜI GIAN CHẠY TIẾN TRÌNH ================
             progress_console(total_steps=num_samples,
@@ -277,6 +294,8 @@ if __name__ == "__main__":
             # Tạo thông tin cho từng luồng
             for process_idx in range(num_processes):
                 agt_copy = copy.deepcopy(agt)
+                actor_collect = copy.deepcopy(actor)
+                critic_collect = copy.deepcopy(critic)
                 replay_cache = ReplayCache()
 
                 func_with_args = partial(trajectory_collection,
@@ -285,6 +304,7 @@ if __name__ == "__main__":
                                          num_timestep_clock=num_clock,
                                          num_steps_per_policy=steps_per_policy,
                                          agt=agt_copy,
+                                         sigma_warmUp=sigma_warmUp,
                                          traj_input_size=traj_input_size,
                                          traj_output_size=traj_output_size,
                                          param_path_dir=param_path_dir,
@@ -315,12 +335,16 @@ if __name__ == "__main__":
                 pool.join()
 
             # Lấy dữ liệu
-            for get_result in get_results:
+            len_results = len(get_results)
+            start_time_results = time.time()
+            for idx, get_result in enumerate(get_results):
                 # tính tổng sample đã thu thập
                 agt.total_samples += len(next(iter(get_result.values())))
-
                 # Gộp dữ liệu từ các luồng
                 Buffer.append_from_buffer(get_result)
+                data_processing_console(total_steps=len_results,
+                                        current_steps=idx + 1,
+                                        begin_time=start_time_results)
 
             # Tạo mini_batch cho quá trình huấn luyện
             mini_batch = Buffer.sample_batch(batch_size=32)
@@ -340,20 +364,21 @@ if __name__ == "__main__":
             # Dừng việc sử dụng view mujoco trong lúc huấn luyện
             is_enable_sim = False
             # ********** HUẤN LUYỆN ************
-
+            len_minibatch = len(mini_batch)
+            actor.sigma_warmUp = sigma_warmUp
             # Lặp qua từng epoch
             for _ in range(epoch):
                 start_time_epoch = time.time()
                 for idx, batch in enumerate(mini_batch):
                     iters_passed += idx
-                    actor_loss, critic_loss, mean_reward = \
+                    actor_loss, critic_loss, mean_rewards = \
                         train(agt=agt,
                               actor=actor,
                               critic=critic,
                               iters_passed=iters_passed,
                               data_batch=batch,
-                              # is_save=True if _ == epoch-1 else False,
-                              is_save=True,
+                              is_save=True if idx == len_minibatch-1 else False,
+                              # is_save=True,
                               epochs=epoch,
                               actor_learning_rate=actor_learning_rate,
                               critic_learning_rate=critic_learning_rate,
@@ -372,7 +397,7 @@ if __name__ == "__main__":
                                            total_epoch=epoch,
                                            actor_loss=actor_loss,
                                            critic_loss=critic_loss,
-                                           mean_reward=mean_reward)
+                                           mean_reward=mean_rewards)
 
         """         
         ============================================================

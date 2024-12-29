@@ -74,16 +74,6 @@ def compute_reward_2th(param: RewardParam):
 
 
 # ĐƯA vận tốc của imu về đúng vận tốc song song với mặt sàn
-def rotate_vector(quat, vec):
-    """Chuyển vector từ local frame sang world frame dựa trên quaternion."""
-    q_w, q_x, q_y, q_z = quat[0], quat[1], quat[2], quat[3]
-    mat = np.array([
-        [1 - 2 * (q_y ** 2 + q_z ** 2), 2 * (q_x * q_y - q_z * q_w), 2 * (q_x * q_z + q_y * q_w)],
-        [2 * (q_x * q_y + q_z * q_w), 1 - 2 * (q_x ** 2 + q_z ** 2), 2 * (q_y * q_z - q_x * q_w)],
-        [2 * (q_x * q_z - q_y * q_w), 2 * (q_y * q_z + q_x * q_w), 1 - 2 * (q_x ** 2 + q_y ** 2)]
-    ])
-    return mat @ vec
-
 
 def compute_reward(param: RewardParam):
     S_t = param.S_t
@@ -106,10 +96,10 @@ def compute_reward(param: RewardParam):
     omega = (1 + math.exp(-50 * (r_swing - 0.15))) ** (-1)
     # =========== Tính R of Bipedal ==========
 
-    left_foot_force = np.linalg.norm(S_t.left_foot_force) ** 2 / 100 * bool(S_t.left_foot_touch)
-    right_foot_force = np.linalg.norm(S_t.right_foot_force) ** 2 / 100 * bool(S_t.right_foot_touch)
-    left_foot_speed = np.linalg.norm(S_t.left_foot_speed) ** 2 * (not bool(S_t.left_foot_touch))
-    right_foot_speed = np.linalg.norm(S_t.right_foot_speed) ** 2 * (not bool(S_t.right_foot_touch))
+    left_foot_force = np.linalg.norm(S_t.left_foot_force) ** 2 / 100
+    right_foot_force = np.linalg.norm(S_t.right_foot_force) ** 2 / 100
+    left_foot_speed = np.linalg.norm(S_t.left_foot_speed) ** 2
+    right_foot_speed = np.linalg.norm(S_t.right_foot_speed) ** 2
     # print(S_t.left_foot_touch, S_t.right_foot_touch)
     q_left_frc = 1 - math.exp(-omega * left_foot_force)
     q_right_frc = 1 - math.exp(-omega * right_foot_force)
@@ -125,9 +115,8 @@ def compute_reward(param: RewardParam):
                 + ECspd_left * q_left_spd \
                 + ECspd_right * q_right_spd
     # =========== Tính R of Cmd ==========
-    pelvis_velocity = rotate_vector(S_t.pelvis_orientation, S_t.pelvis_velocity)
-    q_x = 1 - math.exp(-2 * omega * abs(x_des - pelvis_velocity[0]))  # x_des = vận tốc mục tiêu theo trục x
-    q_y = 1 - math.exp(-2 * omega * abs(y_des + pelvis_velocity[1]))
+    q_x = 1 - math.exp(-2 * omega * abs(x_des - S_t.pelvis_velocity[0]))  # x_des = vận tốc mục tiêu theo trục x
+    q_y = 1 - math.exp(-2 * omega * abs(y_des + S_t.pelvis_velocity[1]))
     q_orientation = 1 - math.exp(-3 * (1 - np.dot(S_t.pelvis_orientation, quat_des) ** 2))  # quaternion
 
     r_cmd = (-1) * q_x \
@@ -135,12 +124,10 @@ def compute_reward(param: RewardParam):
             + (-1) * q_orientation
     # =========== Tính R of Smooth ==========
     # Vận tốc góc và gia tốc
-    pelvis_angular_velocity = rotate_vector(S_t.pelvis_orientation, S_t.pelvis_angular_velocity)
-    pelvis_linear_acceleration = rotate_vector(S_t.pelvis_orientation, S_t.pelvis_linear_acceleration)
     q_action_diff = 1 - math.exp(-5 * np.linalg.norm(action_t - action_t_sub1))
     q_torque = 1 - math.exp(-0.05 * np.linalg.norm(torque))
-    q_pelvis_acc = 1 - math.exp(-0.10 * (np.linalg.norm(pelvis_angular_velocity)
-                                         + np.linalg.norm([pelvis_linear_acceleration])))
+    q_pelvis_acc = 1 - math.exp(-0.10 * (np.linalg.norm(S_t.pelvis_angular_velocity)
+                                         + np.linalg.norm([S_t.pelvis_linear_acceleration])))
 
     r_smooth = (-1) * q_action_diff \
                + (-1) * q_torque \
@@ -159,7 +146,7 @@ def compute_reward(param: RewardParam):
               + 0.300 * r_cmd \
               + 0.100 * r_smooth \
               + 0.100 * r_std_cost \
-              + fall_reward \
+              + 0.200 * fall_reward \
               + beta
 
     # print(f"r_bipedal - Bước: {r_bipedal}")
