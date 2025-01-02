@@ -8,8 +8,6 @@
 import numpy as np
 import math
 
-from numpy import i0
-
 
 def validate_add_state(array: np.ndarray, expected_shape: tuple, name: str):
     """
@@ -35,7 +33,7 @@ def validate_add_state(array: np.ndarray, expected_shape: tuple, name: str):
 def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
     """
     Tính xác suất P(A_i < phi < B_i) với A_i và B_i theo phân phối Von Mises,
-    có tính tuần hoàn với chu kỳ L.
+    có tính tuần hoàn với chu kỳ L và lưu khoảng thừa để gán vào đầu chu kỳ.
 
     Tham số:
     - phi: giá trị cần kiểm tra, điều chỉnh theo chu kỳ L
@@ -45,27 +43,32 @@ def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
     - L: chu kỳ tuần hoàn
 
     Kết quả:
-    - Xác suất phi nằm trong khoảng (A_i, B_i) theo phân phối Von Mises.
+    - Xác suất phi nằm trong khoảng (A_i, B_i) có tính tuần hoàn và mịn với khoảng thừa.
     """
-    # Điều chỉnh phi, a_i, b_i về chu kỳ [0, L]
+    # Điều chỉnh phi về chu kỳ [0, L] mà không thay đổi a_i và b_i
     phi = phi % L
     a_i = a_i % L
     b_i = b_i % L
 
-    # Trung bình của phân phối là trung tâm của (a_i, b_i)
-    if a_i <= b_i:
-        mu = (a_i + b_i) / 2
+    # Lưu phần thừa khi vượt ngoài chu kỳ
+    # Trường hợp không vượt qua điểm L
+    if a_i < b_i:
+        if a_i <= phi <= b_i:
+            return 1.0
+        else:
+            # Tính khoảng cách vòng qua biên L
+            d = min(abs(phi - a_i), abs(phi - b_i),
+                    abs(phi - a_i + L), abs(phi - b_i + L))
+            return np.exp(- (kappa * d) ** 2)
     else:
-        # Nếu khoảng vượt qua chu kỳ, điều chỉnh trung bình
-        mu = ((a_i + b_i + L) / 2) % L
-
-    # Tính khoảng cách tuần hoàn
-    d = min(abs(phi - mu), abs(phi - mu + L), abs(phi - mu - L))
-
-    # Tính xác suất theo phân phối Von Mises
-    prob = np.exp(kappa * np.cos(2 * np.pi * d / L)) / (2 * np.pi * i0(kappa))
-
-    return prob
+        # Trường hợp vượt qua điểm L, chia khoảng làm hai
+        if phi >= a_i or phi <= b_i:
+            return 1.0
+        else:
+            # Khoảng cách vòng qua biên, bao gồm phần thừa
+            d = min(abs(phi - a_i), abs(phi - b_i),
+                    abs(phi - a_i + L), abs(phi - b_i + L))
+            return np.exp(- (kappa * d) ** 2)
 
 # N = 100
 # kappa = 20.0 # độ xoải của phân bố
@@ -76,10 +79,10 @@ def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
 # L = 1 # độ dài của 1 chu kì
 
 
-def get_clock(r, theta_left, theta_right, a_i, N=100, kappa=20.0, L=1):
+def get_clock(r, theta_left, theta_right, N=100, kappa=20.0, L=1):
 
     theta_phase_dif = abs(theta_left - theta_right)  #tính độ lệch pha
-    a_i = a_i  # tạo pha đầu của swing
+    a_i = np.random.uniform(low=0.0, high=1-r*L)  # tạo pha đầu của swing
     b_i = a_i + r*L  # tạo pha kết thúc của swing
 
     X_phi = np.linspace(0, L, N)  # Tạo N bước(pha) trong 1 chu kì
