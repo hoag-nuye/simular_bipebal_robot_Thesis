@@ -35,7 +35,7 @@ agt = Agent(agt_xml_path)
 # -------------- Add a new agent ---------------------
 env = Environment('structures/agility_cassie/environment.xml', agt.agt_data)
 agt.add_env(env, 'cassie_env')
-agt.set_state(0)  # Khởi tạo giá trị ban đầu
+agt.set_state()  # Khởi tạo giá trị ban đầu
 
 # for (k, v) in agt.dTarget_ranges.items():
 #     print(v)

@@ -60,7 +60,7 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
         # -------------- KIỂM TRA VIỆC NGÃ CỦA ROBOT (final state) -----------
         fall_detector = FallDetector(n=100, min_force_threshold=20, max_tilt_threshold=70)
         # Tải Actor và Critic mới nhất
-        path_viewer = "viewer_" + "actor_epoch_latest"
+        path_viewer = "viewer_" + "viewer_actor_epoch_latest"
         actor_path = find_latest_model(path_viewer, directory=path_dir)
         with mujoco.viewer.launch_passive(agt.agt_model, agt.agt_data, show_left_ui=True, show_right_ui=True) as viewer:
             while viewer.is_running():
@@ -75,14 +75,15 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                         if check_begin_state:
                             agt.set_state_begin()
                             check_begin_state = False
-                        agt.set_state(timestep_clock_counter)
+                        agt.set_state()
                         input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel,
                                                                   timestep_clock_counter).float()
-                        action, mu, sigma, control = process_action(
+                        action, mu, sigma, torque, pTarget, pGain, dGain = process_action(
                             agent=agt,
                             actor=Actor_traj,
-                            input_model=input_model,
+                            input_model=input_model
                         )
+                        pTarget, pGain, dGain = np.array(pTarget.cpu()), np.array(pGain.cpu()), np.array(dGain.cpu())
                         timestep_clock_counter += 1
 
                         # ---- Lấy dữ liệu về lực chân và độ nghiêng và kiểm tra xem có bị ngã---
@@ -102,8 +103,6 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                             timestep_clock_counter = 0
 
                         # Thiết lập mô men điều khiển cho agent
-
-                        agt.control_agent(control)
                         # progress_console(agt)
                         # for idx in range(len(torque_ranges)):
                         #     torque = np.random.uniform(torque_ranges[idx][0], torque_ranges[idx][1])
@@ -116,7 +115,7 @@ def mujoco_viewer_process(is_enable, policy_freq=40, pd_control_freq=2000, use_c
                     if steps_per_policy_counter < steps_per_policy:
                         steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
                         # Thiết lập mô men điều khiển cho agent
-                        # agt.control_agent(control)
+                        agt.control_agent(pTarget, pGain, dGain)
                         mujoco.mj_step(agt.agt_model, agt.agt_data)
                         viewer.sync()
                         continue
@@ -158,14 +157,19 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
     # ------------------ SETUP CONTROL SIGNAL --------------------
     is_control = True  # Kiểm tra xem đã điều khiển agent chưa
     # Create clock for agent and control
-    num_clock = 100
+    # Tạo tín hiệu điều khiển agent
+    agt.x_des_vel = 0.96  # Random từ -1.5 đến 1.5 m/s
+    agt.y_des_vel = 0  # Random từ -1.0 đến 1.0 m/s
+    range_steps = 0.6  # (m)
+    cycle_time_steps = range_steps / agt.x_des_vel  # thời gian hoàn thành 1 chu kì bước với vận tốc cho trc
+    num_clock = int(cycle_time_steps / (1 / policy_freq))
+    # 0.8 s cho 1 chu kì dậm chân ->
+    # num_clock = 30
     theta_left = 0
-    theta_right = 0.5
-    r = 0.6
-    a_i = 0.5
+    theta_right = 0.55
+    r = 0.6  # Độ dài pha nhấc chân
+    a_i = 0.3  # Pha tại t = 0
     agt.set_clock(r=r, N=num_clock, theta_left=theta_left, theta_right=theta_right, a_i=a_i)
-    agt.x_des_vel = 0
-    agt.y_des_vel = 0
 
     # Tạo tham số cho mô hình Actor và Critic
     path_dir = "models/param/"
@@ -177,9 +181,9 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
                        pTarget_range=agt.dTarget_ranges).to(device)
 
     # -------------- KIỂM TRA VIỆC NGÃ CỦA ROBOT (final state) -----------
-    fall_detector = FallDetector(n=100, min_force_threshold=20, max_tilt_threshold=70)
+    fall_detector = FallDetector(n=50, min_force_threshold=20, max_tilt_threshold=90)
     # Tải Actor và Critic mới nhất
-    path_viewer = "viewer_" + "actor_epoch_latest"
+    path_viewer = "viewer_" + "view_actor_epoch_latest"
     actor_path = find_latest_model(path_viewer, directory=path_dir)
     with mujoco.viewer.launch_passive(agt.agt_model, agt.agt_data, show_left_ui=True, show_right_ui=True) as viewer:
         while viewer.is_running():
@@ -194,13 +198,14 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
                     if check_begin_state:
                         agt.set_state_begin()
                         check_begin_state = False
-                    agt.set_state(timestep_clock_counter)
+                    agt.set_state()
                     input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel, timestep_clock_counter).float()
-                    action, mu, sigma, control = process_action(
+                    action, mu, sigma, torque, pTarget, pGain, dGain = process_action(
                         agent=agt,
                         actor=Actor_traj,
-                        input_model=input_model,
+                        input_model=input_model
                     )
+                    pTarget, pGain, dGain = np.array(pTarget.cpu()), np.array(pGain.cpu()), np.array(dGain.cpu())
                     timestep_clock_counter += 1
 
                     # ---- Lấy dữ liệu về lực chân và độ nghiêng và kiểm tra xem có bị ngã---
@@ -221,7 +226,6 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
 
                     # Thiết lập mô men điều khiển cho agent
 
-                    agt.control_agent(control)
                     # progress_console(agt)
                     # for idx in range(len(torque_ranges)):
                     #     torque = np.random.uniform(torque_ranges[idx][0], torque_ranges[idx][1])
@@ -235,7 +239,7 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
                 if steps_per_policy_counter < steps_per_policy:
                     steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
                     # Thiết lập mô men điều khiển cho agent
-                    # agt.control_agent(control)
+                    agt.control_agent(pTarget, pGain, dGain)
                     mujoco.mj_step(agt.agt_model, agt.agt_data)
                     viewer.sync()
                     continue
@@ -380,7 +384,7 @@ def mujoco_viewer_process_begin(agt: Agent):
                 i = 0
                 agt.agt_data.qvel[:] = 0  # Đặt vận tốc bằng 0
                 agt.agt_data.ctrl[:] = 0  # Đặt lực điều khiển bằng 0
-                agt.set_state(0)
+                agt.set_state()
                 progress_console(agt)
 
             if not paused:  # Chỉ render khi không bị tạm dừng

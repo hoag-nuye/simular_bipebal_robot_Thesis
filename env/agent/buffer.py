@@ -50,7 +50,7 @@ class ReplayCache(Buffer):
     # Set id cho trajectory
     def sget_range_trajectory(self, begin_id=0):
         self.buffer["trajectory_ids"] = [_id+begin_id for _id in self.buffer["trajectory_ids"]]
-        last_id = max(self.buffer["trajectory_ids"])
+        last_id = max(self.buffer["trajectory_ids"])+1
         return last_id
 
 # ========================== RELAY BUFFER LỚN =======================
@@ -252,13 +252,16 @@ class ReplayBuffer(Buffer):
         # Lấy các giá trị trong buffer theo các chỉ mục đã chọn
         batches_indices_size = len(batches_indices)
         start_time = time.time()
+        # Chuyển self.buffer sang NumPy array một lần duy nhất
+        numpy_buffer = {key: np.array(value) for key, value in self.buffer.items()}
+
         for idx, batch_indices in enumerate(batches_indices):
             data_processing_console(total_steps=batches_indices_size,
                                     current_steps=idx + 1,
                                     begin_time=start_time)
 
-            # Tạo batch_dict trực tiếp bằng cách truy xuất mảng NumPy
-            batch_dict = {key: np.array(self.buffer[key])[batch_indices] for key in self.buffer}
+            # Truy xuất dữ liệu nhanh hơn từ numpy_buffer
+            batch_dict = {key: numpy_buffer[key][batch_indices] for key in numpy_buffer}
             mini_batch_dict.append(batch_dict)
 
         # for idx, batch_indices in enumerate(batches_indices):

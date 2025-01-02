@@ -146,8 +146,9 @@ def compute_reward(param: RewardParam):
               + 0.300 * r_cmd \
               + 0.100 * r_smooth \
               + 0.100 * r_std_cost \
-              + 0.200 * fall_reward \
               + beta
+              # + fall_reward \
+
 
     # print(f"r_bipedal - Bước: {r_bipedal}")
     # print(f"r_cmd - Tránh ngã: {r_cmd}")

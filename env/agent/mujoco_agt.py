@@ -53,8 +53,7 @@ class Agent:
     def __init__(self, agt_xml):
 
         self.agt_xml = agt_xml
-        self.agt_model = mujoco.MjModel.from_xml_path(
-            agt_xml)  # Provides the static structure of the model and is instantiated once from an XML file.
+        self.agt_model = mujoco.MjModel.from_xml_path(agt_xml)  # Provides the static structure of the model and is instantiated once from an XML file.
         self.agt_data = mujoco.MjData(self.agt_model)  # stores state and is updated throughout the simulation
 
         # save paused action of simulation
@@ -127,8 +126,14 @@ class Agent:
     # ========================= THIẾT LẬP TRẠNG THÁI BẮT ĐẦU =========================
 
     def get_foot_forces_z(self):
-        left_foot_force = np.linalg.norm(self.S_t.left_foot_force) ** 2 / 100 * bool(self.S_t.left_foot_touch)
-        right_foot_force = np.linalg.norm(self.S_t.right_foot_force) ** 2 / 100 * bool(self.S_t.right_foot_touch)
+        left_foot_touch = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_touch]
+        ])
+        right_foot_touch = np.array([
+            self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_touch]
+        ])
+        left_foot_force = np.linalg.norm(self.S_t.left_foot_force) ** 2 / 100 * bool(left_foot_touch)
+        right_foot_force = np.linalg.norm(self.S_t.right_foot_force) ** 2 / 100 * bool(right_foot_touch)
         return left_foot_force, right_foot_force
 
     def get_tilt_angle(self):
@@ -287,7 +292,7 @@ class Agent:
 
     # ========================= STATE =========================
 
-    def set_state(self, time_step):
+    def set_state(self):
         # Tạo một đối tượng mới để lưu trữ trạng thái S_t
 
         left_foot_touch = np.array([
@@ -299,17 +304,17 @@ class Agent:
 
         left_foot_force = np.array([
             self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_force]
-        ])
+        ]) * left_foot_touch.any()
         right_foot_force = np.array([
             self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_force]
-        ])
+        ]) * right_foot_touch.any()
 
         left_foot_speed = np.array([
             self.agt_data.sensordata[i] for i in self.state_map[StateFields.left_foot_speed]
-        ])
+        ]) * (not left_foot_touch.any())
         right_foot_speed = np.array([
             self.agt_data.sensordata[i] for i in self.state_map[StateFields.right_foot_speed]
-        ])
+        ]) * (not right_foot_touch.any())
 
         pelvis_orientation = np.array([
             self.agt_data.sensordata[i] for i in self.state_map[StateFields.pelvis_orientation]
@@ -326,17 +331,16 @@ class Agent:
         ])
 
         # ============= CHUYỂN ĐỔI HƯỚNG VECTOR QUA GÓC XOAY ==================
-        left_foot_force = rotate_vector(pelvis_orientation, left_foot_force)*left_foot_touch.any()
-        right_foot_force = rotate_vector(pelvis_orientation, right_foot_force)*right_foot_touch.any()
-        left_foot_speed = rotate_vector(pelvis_orientation, left_foot_speed)*(not left_foot_touch.any())
-        right_foot_speed = rotate_vector(pelvis_orientation, right_foot_speed)*(not right_foot_touch.any())
+        left_foot_force = rotate_vector(pelvis_orientation, left_foot_force)
+        right_foot_force = rotate_vector(pelvis_orientation, right_foot_force)
+        left_foot_speed = rotate_vector(pelvis_orientation, left_foot_speed)
+        right_foot_speed = rotate_vector(pelvis_orientation, right_foot_speed)
         pelvis_velocity = rotate_vector(pelvis_orientation, pelvis_velocity)
         pelvis_angular_velocity = rotate_vector(pelvis_orientation, pelvis_angular_velocity)
         pelvis_linear_acceleration = rotate_vector(pelvis_orientation, pelvis_linear_acceleration)
 
         # ============= LƯU TRỮ THÔNG TIN ==================
         self.S_t = AgentState(
-            time_step=time_step,
             isTerminalState=False,
             joint_positions=np.array([
                 self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_positions]
@@ -344,8 +348,6 @@ class Agent:
             joint_velocities=np.array([
                 self.agt_data.sensordata[i] for i in self.state_map[StateFields.joint_velocities]
             ]),
-            left_foot_touch=left_foot_touch,
-            right_foot_touch=right_foot_touch,
             left_foot_force=left_foot_force,
             right_foot_force=right_foot_force,
             left_foot_speed=left_foot_speed,
@@ -474,7 +476,7 @@ class Agent:
         torque = []
         for i in range(self.atr_num):
             torque_i = sampled_pGain[i] * (sampled_pTarget[i] - q[i]) + \
-                       sampled_dGain[i] * (0 - qd[i])
+                       sampled_dGain[i] * qd[i]
             torque.append(torque_i)
 
         # Clip torque về ctrl_ranges
@@ -517,7 +519,7 @@ class Agent:
         #                               [-0.9, 0.9]])}\n")
         # print("===============================")
 
-        return torque, action
+        return torque, action, sampled_pTarget, sampled_pGain, sampled_dGain
 
     # Hàm đơn giản hơn với đầu ra của mạng là 30 tham số
     def control_signal(self, mu, q, qd):
@@ -569,12 +571,24 @@ class Agent:
         return torque
 
     # Điều khiển agent
-    def control_agent(self, control_signal):
-        # print("===============BEGIN===============================")
-        # print(f"Max torque: {control_signal.max()}, Min torque: {control_signal.min()}")
-        # print("===============END===================================")
-        for i, (torque, idx) in enumerate(zip(control_signal, self.atr_ctrl_map.values())):
-            self.agt_data.ctrl[idx] = torque
+    def control_agent(self, pTarget, pGain, dGain):
+        try:
+            # print("===============BEGIN===============================")
+            # print(f"Max torque: {control_signal.max()}, Min torque: {control_signal.min()}")
+            # print("===============END===================================")
+
+            pPre = np.array(
+                [self.agt_data.sensordata[i] for i in self.atr_map[ActuatorFields.actuator_positions]])
+            dPre = np.array(
+                [self.agt_data.sensordata[i] for i in self.atr_map[ActuatorFields.actuator_velocities]])
+            control_signal = pGain*(pTarget - pPre) + dGain*dPre
+            # print(pTarget.shape, pGain.shape, dGain.shape, pPre.shape, dPre.shape, control_signal.shape)
+            for i, (torque, idx) in enumerate(zip(control_signal, self.atr_ctrl_map.values())):
+                self.agt_data.ctrl[idx] = torque
+        except Exception as e:
+            print(e)
+            print(" Ở ĐÂY ")
+            raise "Ở ĐÂY"
 
     # ========================= REWARD AND CLOCK =========================
 

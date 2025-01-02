@@ -161,10 +161,10 @@ if __name__ == "__main__":
     # Số luông thu thập
     num_processes = 4
     # Số lượng trajectory cần thu thập cho mỗi luồng
-    max_sample_collect = 20000
+    max_sample_collect = 50000
     # Số sample thu thập tối đa
     num_samples_traj = 300  # Số samples tối đa trong 1 trajectory
-    num_samples = 35000000  # số lượng sample cần thu thập
+    num_samples = 20000000  # số lượng sample cần thu thập
 
     # Tạo tham số cho mô hình Actor và Critic
     traj_input_size = 58
@@ -195,11 +195,13 @@ if __name__ == "__main__":
     # ********** KHỞI TẠO BIẾN CHO THU THẬP ***********
     # ============== KHỞI TẠO TẦN SỐ NHỊP BƯỚC ============
     # Tạo tín hiệu điều khiển agent
-    agt.x_des_vel = 0.8  # Random từ -1.5 đến 1.5 m/s
+    agt.x_des_vel = 0.96  # Random từ -1.5 đến 1.5 m/s
     agt.y_des_vel = 0  # Random từ -1.0 đến 1.0 m/s
     range_steps = 0.6  # (m)
     cycle_time_steps = range_steps/agt.x_des_vel  # thời gian hoàn thành 1 chu kì bước với vận tốc cho trc
     num_clock = int(cycle_time_steps/(1/policy_freq))
+    # 0.8 s cho 1 chu kì dậm chân ->
+    # num_clock = 30
     theta_left = 0
     theta_right = 0.55
     r = 0.6  # Độ dài pha nhấc chân
@@ -260,9 +262,9 @@ if __name__ == "__main__":
     #     critic.load_model(critic_path)
     #     # print(f"Loaded latest Critic model: {critic_path}")
     # ================== QUÁ TRÌNH WARMUP CHO SIGMA ĐỂ TĂNG KHÁM PHÁ =================
-    sigma_initial = 0.5
-    sigma_final = 0.01
-    T = int(num_samples/max_sample_collect*0.3)  # tổng số bước để hoàn thành decay
+    sigma_initial = 0.8  # => sigma^2 = 0.64
+    sigma_final = 0.4    # => sigma^2 = 0.16
+    T = int(num_samples/max_sample_collect*0.9)  # tổng số bước để hoàn thành decay
 
 
 
@@ -314,7 +316,6 @@ if __name__ == "__main__":
                 # Thay thế việc lưu func_with_args vào danh sách khác nếu cần
                 tasks.append(func_with_args)
             try:
-
                 # ********** THU THẬP DỮ LIỆU *************
                 # Sử dụng Pool để thực thi song song
                 with Pool(processes=num_processes, initializer=initializer, initargs=(shared_var, lock)) as pool:
@@ -323,23 +324,27 @@ if __name__ == "__main__":
                     # Kết hợp kết quả vào ReplayBuffer
                     for result in results:
                         if result is not None:
+                            # Lấy dữ liệu data của relay buffer
                             # Thiết lập lại id traj
                             # print(current_max_traj_id)
                             current_max_traj_id = result.sget_range_trajectory(current_max_traj_id)
-
-                            # Lấy dữ liệu data của relay buffer
+                            # print(result.buffer['trajectory_ids'])
                             get_results.append(result.get_samples())
 
             except KeyboardInterrupt:
                 pool.terminate()
-                pool.join()
-
+            finally:
+                pool.close()  # Đóng pool
+                pool.join()  # Chờ tiến trình dừng
+                
             # Lấy dữ liệu
             len_results = len(get_results)
             start_time_results = time.time()
             for idx, get_result in enumerate(get_results):
                 # tính tổng sample đã thu thập
+
                 agt.total_samples += len(next(iter(get_result.values())))
+
                 # Gộp dữ liệu từ các luồng
                 Buffer.append_from_buffer(get_result)
                 data_processing_console(total_steps=len_results,

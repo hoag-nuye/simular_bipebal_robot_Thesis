@@ -116,12 +116,9 @@ class ActuatorFields(Enum):
 
 @dataclass
 class AgentState:
-    time_step: int
     isTerminalState: bool  # Kiểm tra xem có phải trạng thái cuối hay không
     joint_positions: np.ndarray  # (6D vector) Vị trí góc quay của khớp
     joint_velocities: np.ndarray  # (6D vector) Vận tốc góc của khớp
-    left_foot_touch: np.ndarray  # (1D vector)  Tiếp xúc chân trái của pelvis
-    right_foot_touch: np.ndarray  # (1D vector) Tiếp xúc chân phải
     left_foot_force: np.ndarray  # (3D vector) Lực tiếp xúc chân trái của pelvis
     right_foot_force: np.ndarray  # (3D vector) Lực tiếp xúc chân phải
     left_foot_speed: np.ndarray  # (3D vector) Vận tốc chân trái của pelvis

@@ -8,6 +8,8 @@
 import numpy as np
 import math
 
+from numpy import i0
+
 
 def validate_add_state(array: np.ndarray, expected_shape: tuple, name: str):
     """
@@ -33,7 +35,7 @@ def validate_add_state(array: np.ndarray, expected_shape: tuple, name: str):
 def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
     """
     Tính xác suất P(A_i < phi < B_i) với A_i và B_i theo phân phối Von Mises,
-    có tính tuần hoàn với chu kỳ L và lưu khoảng thừa để gán vào đầu chu kỳ.
+    có tính tuần hoàn với chu kỳ L.
 
     Tham số:
     - phi: giá trị cần kiểm tra, điều chỉnh theo chu kỳ L
@@ -43,32 +45,27 @@ def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
     - L: chu kỳ tuần hoàn
 
     Kết quả:
-    - Xác suất phi nằm trong khoảng (A_i, B_i) có tính tuần hoàn và mịn với khoảng thừa.
+    - Xác suất phi nằm trong khoảng (A_i, B_i) theo phân phối Von Mises.
     """
-    # Điều chỉnh phi về chu kỳ [0, L] mà không thay đổi a_i và b_i
+    # Điều chỉnh phi, a_i, b_i về chu kỳ [0, L]
     phi = phi % L
     a_i = a_i % L
     b_i = b_i % L
 
-    # Lưu phần thừa khi vượt ngoài chu kỳ
-    # Trường hợp không vượt qua điểm L
-    if a_i < b_i:
-        if a_i <= phi <= b_i:
-            return 1.0
-        else:
-            # Tính khoảng cách vòng qua biên L
-            d = min(abs(phi - a_i), abs(phi - b_i),
-                    abs(phi - a_i + L), abs(phi - b_i + L))
-            return np.exp(- (kappa * d) ** 2)
+    # Trung bình của phân phối là trung tâm của (a_i, b_i)
+    if a_i <= b_i:
+        mu = (a_i + b_i) / 2
     else:
-        # Trường hợp vượt qua điểm L, chia khoảng làm hai
-        if phi >= a_i or phi <= b_i:
-            return 1.0
-        else:
-            # Khoảng cách vòng qua biên, bao gồm phần thừa
-            d = min(abs(phi - a_i), abs(phi - b_i),
-                    abs(phi - a_i + L), abs(phi - b_i + L))
-            return np.exp(- (kappa * d) ** 2)
+        # Nếu khoảng vượt qua chu kỳ, điều chỉnh trung bình
+        mu = ((a_i + b_i + L) / 2) % L
+
+    # Tính khoảng cách tuần hoàn
+    d = min(abs(phi - mu), abs(phi - mu + L), abs(phi - mu - L))
+
+    # Tính xác suất theo phân phối Von Mises
+    prob = np.exp(kappa * np.cos(2 * np.pi * d / L)) / (2 * np.pi * i0(kappa))
+
+    return prob
 
 # N = 100
 # kappa = 20.0 # độ xoải của phân bố

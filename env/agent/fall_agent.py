@@ -3,7 +3,7 @@ from collections import deque
 
 # Class kiểm tra xem agent có đang bị ngã hay không
 class FallDetector:
-    def __init__(self, n, min_force_threshold=10, max_tilt_threshold=30):
+    def __init__(self, n, min_force_threshold=10, max_tilt_threshold=85):
         """
         Khởi tạo bộ phát hiện ngã:
         - n: Số lượng giá trị gần nhất cần lưu.

@@ -58,23 +58,24 @@ def ppo_loss_actor(advantage, new_log_probs=None, old_log_probs=None, sigma=None
     advantage_norm = (advantage - advantage_mean) / (advantage_std + 1e-8)  # [batch_size, trajectory_length, 1]
 
     # Tổng hợp các hành động lại
-    clipped_ratios = torch.clamp(ratios, 1 - epsilon, 1 + epsilon)
+    clipped_ratios = torch.clamp(ratios * advantage_norm, (1 - epsilon) * advantage_norm, (1 + epsilon) * advantage_norm)
 
     # Tính surrogate loss
-    surrogate_loss = torch.min(ratios * advantage_norm, clipped_ratios * advantage_norm)
+    surrogate_loss = torch.min(ratios * advantage_norm, clipped_ratios)
     surrogate_loss = surrogate_loss * mask_expanded
 
-    # Tính entropy
-    if sigma is not None:
-        entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma ** 2) * mask_expanded, dim=2, keepdim=True)
-    else:
-        entropy = torch.zeros_like(surrogate_loss)
+    # # Tính entropy
+    # if sigma is not None:
+    #     entropy = 0.5 * torch.sum(torch.log(2 * torch.pi * torch.e * sigma ** 2) * mask_expanded, dim=2, keepdim=True)
+    # else:
+    #     entropy = torch.zeros_like(surrogate_loss)
     # print(f"ratios: {ratios}")
     # print(f"clipped_ratios: {clipped_ratios}")
     # print(f"sigma: {sigma}")
     # print(f"surrogate_loss: {surrogate_loss}")
     # Tổng hợp loss
-    _loss = -surrogate_loss + entropy_weight * entropy
+    # _loss = surrogate_loss + entropy_weight * entropy
+    _loss = surrogate_loss 
     loss_sum = (_loss * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
 
     # Đếm số phần tử hợp lệ
@@ -93,29 +94,28 @@ def ppo_loss_critic(predicted_values, returns, mask=None):
         mask_expanded = mask.unsqueeze(-1)  # Kích thước [batch_size, trajectory_length, 1]
     else:
         raise ValueError("Phải cung cấp mask")
-    # ** Chuẩn hóa advantage **
-
-    # Tính tổng có trọng số
-    returns_sum = (returns * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
-
     # Đếm số phần tử hợp lệ
     valid_count = mask.sum(dim=1, keepdim=True).unsqueeze(-1)  # [batch_size, 1, 1]
+    # ** Chuẩn hóa advantage **
 
-    # Tính Mean
-    returns_mean = returns_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+    # # Tính tổng có trọng số
+    # returns_sum = (returns * mask_expanded).sum(dim=1, keepdim=True)  # [batch_size, 1, 1]
 
-    # Tính phương sai (Variance)
-    returns_squared_diff = (returns - returns_mean) ** 2
-    weighted_variance = (returns_squared_diff * mask_expanded).sum(dim=1, keepdim=True) / (valid_count + 1e-8)
-
-    # Tính Std (Căn bậc hai của Variance)
-    returns_std = torch.sqrt(weighted_variance)  # [batch_size, 1, 1]
-
-    # Chuẩn hóa advantage
-    returns_norm = (returns - returns_mean) / (returns_std + 1e-8)  # [batch_size, trajectory_length, 1]
+    # # Tính Mean
+    # returns_mean = returns_sum / (valid_count + 1e-8)  # [batch_size, 1, 1]
+    #
+    # # Tính phương sai (Variance)
+    # returns_squared_diff = (returns - returns_mean) ** 2
+    # weighted_variance = (returns_squared_diff * mask_expanded).sum(dim=1, keepdim=True) / (valid_count + 1e-8)
+    #
+    # # Tính Std (Căn bậc hai của Variance)
+    # returns_std = torch.sqrt(weighted_variance)  # [batch_size, 1, 1]
+    #
+    # # Chuẩn hóa advantage
+    # returns_norm = (returns - returns_mean) / (returns_std + 1e-8)  # [batch_size, trajectory_length, 1]
     # Chỉ tính toán trên các giá trị không phải padding
     # Tính hiệu giữa giá trị dự đoán và giá trị thực
-    differences = predicted_values - returns_norm
+    differences = predicted_values - returns
     # Tính bình phương của các hiệu
     squared_differences = differences ** 2
     # Tính trung bình của các bình phương hiệu
@@ -209,16 +209,14 @@ class Actor(nn.Module):
         pTarget_mu = self.pTarget_min + (self.pTarget_max - self.pTarget_min) * (torch.tanh(pTarget_mu) + 1) / 2
         # print("ĐẦU RA: ", pTarget_mu)
 
-        # Áp dụng softplus cho pGain_mu và dGain_mu (để đảm bảo giá trị dương)
-        pGain_mu = F.softplus(pGain_mu)
-        dGain_mu = F.softplus(dGain_mu)
-
         # Gộp các mu lại
         mu = torch.cat([pTarget_mu, pGain_mu, dGain_mu], dim=-1)
 
         # Đảm bảo sigma > 0 bằng cách sử dụng hàm softplus
         # sigma = nn.functional.softplus(sigma)
         # print(self.sigma_warmUp)
+        # a, b = 0.01, 1
+        # sigma = (b - a) * torch.sigmoid(output) + a
         # raise "TẮT"
         if self.sigma_warmUp is None:
             sigma = torch.clamp(nn.functional.softplus(sigma), min=0.01)
@@ -460,8 +458,8 @@ class PPOClip_Training:
         # Tính gradient cho Actor
         actor_loss.backward()  # Tính backward để giữ đồ thị
         # Clip gradient với giá trị cụ thể
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
-        # torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.clip_value)
+        # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=0.5)
+        torch.nn.utils.clip_grad_value_(self.actor.parameters(), self.clip_value)
 
         # # In giá trị gradient của các tham số trong Actor
         # print("\n=== Gradient của Actor ===")
@@ -483,8 +481,8 @@ class PPOClip_Training:
         # Tính gradient cho Critic
         critic_loss.backward()  # Tính backward để giữ đồ thị
         # Clip gradient với giá trị cụ thể
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
-        # torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.clip_value)
+        # torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=0.5)
+        torch.nn.utils.clip_grad_value_(self.critic.parameters(), self.clip_value)
         # In giá trị gradient của các tham số trong Critic
         # print("\n=== Gradient của Critic ===")
         # for name, param in self.critic.named_parameters():

@@ -62,10 +62,10 @@ def process_action(agent: Agent, actor: Actor, input_model):
     sigma = sigma.detach()
 
     # Tính toán tín hiệu điều khiển và hành động
-    torque, action = agent.control_signal_complex(mu, sigma,
+    torque, action, pTarget, pGain, dGain = agent.control_signal_complex(mu, sigma,
                                                   q=agent.atr_t[ActuatorFields.actuator_positions],
                                                   qd=agent.atr_t[ActuatorFields.actuator_velocities])
-    return action, mu, sigma, torque
+    return action, mu, sigma, torque, pTarget, pGain, dGain
 
 
 # ============= THU THẬP TRẠNG THÁI SAU KHI ACTION ĐƯỢC THỰC HIỆN ================
@@ -164,16 +164,17 @@ def trajectory_collection(max_sample_collect,
         # print(f"Loaded latest Critic model: {critic_path}")
 
     # -------------- KIỂM TRA VIỆC NGÃ CỦA ROBOT (final state) -----------
+    fall_reward = 0
     check_begin_state = True  # Thiết lập vị trí ban đầu
     check_terminal_state = False  # Kiểm tra trạng thái cuối
-    fall_detector = FallDetector(n=30, min_force_threshold=10, max_tilt_threshold=85)
+    # fall_detector = FallDetector(n=30, min_force_threshold=10, max_tilt_threshold=85)
     # ------------------------ SIMULAR ----------------------
     is_control = True  # Kiểm tra xem đã điều khiển agent chưa
     # Create viewer with UI options
     # Bắt đầu đo thời gian
     # ------------ RUNNING ------------------
     start_time = time.time()
-    action, mu, sigma, control = None, None, None, None
+    action, mu, sigma, torque, pTarget, pGain, dGain = None, None, None, None, None, None, None
     is_done = False  # Kiểm tra xem đã kết thúc thu thập hay chưa
     while not is_done:
 
@@ -193,36 +194,37 @@ def trajectory_collection(max_sample_collect,
                         agt.set_state_begin()
                         check_begin_state = False
 
-                    agt.set_state(timestep_clock_counter)
+                    agt.set_state()
                     input_model = agt.get_state_t_input_model(agt.x_des_vel, agt.y_des_vel,
                                                               timestep_clock_counter).float()
                     # ---- Lấy dữ liệu về lực chân và độ nghiêng và kiểm tra xem có bị ngã---
                     # Kiểm tra xem có bị ngã hay không
 
-                    left_fz, right_fz = agt.get_foot_forces_z()
+                    # left_fz, right_fz = agt.get_foot_forces_z()
                     tilt_angle = agt.get_tilt_angle()
-                    fall_detector.update_data(left_fz=left_fz,
-                                              right_fz=right_fz,
-                                              tilt_angle=tilt_angle)
+                    # fall_detector.update_data(left_fz=left_fz,
+                    #                           right_fz=right_fz,
+                    #                           tilt_angle=tilt_angle)
                     # print(tilt_angle)
                     # print((left_fz, right_fz))
-                    if fall_detector.is_fallen():
+                    # if fall_detector.is_fallen():
+                    if tilt_angle > 85:
                         # print("=========================NGÃ===========================")
                         fall_reward = -1
                         # print(f"Number trajectory:{traj_counter} -- sample: {samples_of_traj_counter} -- timestep: {timestep_clock_counter}")
-                        fall_detector.reset_data()
+                        # fall_detector.reset_data()
                         check_terminal_state = True
                     else:
                         # print(f"Number trajectory:{traj_counter} -- sample: {samples_of_traj_counter}")
                         fall_reward = 0.5
 
                     #  ======== ĐIỀU KHIỂN AGENT =============
-                    torque, mu, sigma, control = process_action(
+                    action, mu, sigma, torque, pTarget, pGain, dGain = process_action(
                         agent=agt,
                         actor=Actor_traj,
                         input_model=input_model
                     )
-                    agt.control_agent(control)
+                    pTarget, pGain, dGain = np.array(pTarget.cpu()), np.array(pGain.cpu()), np.array(dGain.cpu())
                     # print(f"MU_dTarget: {mu[:10]}\n"
                     #       f"range_pTarget: \n{np.array(list(agt.dTarget_ranges.values()))}\n"
                     #       f"MU_dGain: {mu[10:20]}\n"
@@ -241,8 +243,7 @@ def trajectory_collection(max_sample_collect,
                     # --------------- THU THẬP ĐỦ 50000 SAMPLE THÌ DỪNG ----------
                     with glv.g_lock:
                         if glv.g_shared_var.value >= max_sample_collect:
-                            is_done = True
-                            continue
+                            break
                         else:
                             collect_and_store(agent=agt,
                                               buffer=buffer,
@@ -250,9 +251,9 @@ def trajectory_collection(max_sample_collect,
                                               traj_id=traj_counter,
                                               tms_clk=timestep_clock_counter,
                                               input_model=input_model,
-                                              action=torque,
+                                              action=action,
                                               fall_reward=fall_reward,
-                                              torque_t=control,
+                                              torque_t=torque,
                                               mu=mu,
                                               sigma=sigma)
 
@@ -273,7 +274,7 @@ def trajectory_collection(max_sample_collect,
                     steps_per_policy_counter += 1  # Tăng biến đếm lên 1 sau khi mô phỏng được 1 bước
                     # MÔ PHỎNG
                     # ĐIỀU KHIỂN AGENT
-                    # agt.control_agent(control)
+                    agt.control_agent(pTarget, pGain, dGain)
                     mujoco.mj_step(agt.agt_model, agt.agt_data)
                     continue
                 # if check_traj_id(traj_id, 0):
