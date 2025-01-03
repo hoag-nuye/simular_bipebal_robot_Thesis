@@ -43,7 +43,7 @@ agt.set_state()  # Khởi tạo giá trị ban đầu
 # plot_param_process(path_dir='models/param/training/', filename='training_metrics_all_day1.pth',update_interval=5000)
 # mujoco_viewer_process_begin(agt)
 # mujoco_viewer_process(agt=agt, is_enable=True,policy_freq=40, pd_control_freq=2000, use_cuda=True)
-# mujoco_viewer_process_external_state(agt=agt, policy_freq=40, pd_control_freq=2000, use_cuda=True)
+mujoco_viewer_process_external_state(agt=agt, policy_freq=40, pd_control_freq=2000, use_cuda=True)
 
 
 

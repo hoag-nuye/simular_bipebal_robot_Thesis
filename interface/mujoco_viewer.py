@@ -183,7 +183,7 @@ def mujoco_viewer_process_external_state(agt: Agent, policy_freq=40, pd_control_
     # -------------- KIỂM TRA VIỆC NGÃ CỦA ROBOT (final state) -----------
     fall_detector = FallDetector(n=50, min_force_threshold=20, max_tilt_threshold=90)
     # Tải Actor và Critic mới nhất
-    path_viewer = "viewer_" + "view_actor_epoch_latest"
+    path_viewer = "viewer_" + "actor_epoch_latest"
     actor_path = find_latest_model(path_viewer, directory=path_dir)
     with mujoco.viewer.launch_passive(agt.agt_model, agt.agt_data, show_left_ui=True, show_right_ui=True) as viewer:
         while viewer.is_running():

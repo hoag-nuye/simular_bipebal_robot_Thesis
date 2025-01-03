@@ -79,10 +79,10 @@ def __von_mises_prob_quick_decay(phi, a_i, b_i, kappa, L):
 # L = 1 # độ dài của 1 chu kì
 
 
-def get_clock(r, theta_left, theta_right, N=100, kappa=20.0, L=1):
+def get_clock(r, theta_left, theta_right, a_i ,N=100, kappa=20.0, L=1):
 
     theta_phase_dif = abs(theta_left - theta_right)  #tính độ lệch pha
-    a_i = np.random.uniform(low=0.0, high=1-r*L)  # tạo pha đầu của swing
+    a_i = a_i  # tạo pha đầu của swing
     b_i = a_i + r*L  # tạo pha kết thúc của swing
 
     X_phi = np.linspace(0, L, N)  # Tạo N bước(pha) trong 1 chu kì
